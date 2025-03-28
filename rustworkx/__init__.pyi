@@ -76,6 +76,7 @@ from .rustworkx import graph_two_color as graph_two_color
 from .rustworkx import digraph_two_color as digraph_two_color
 from .rustworkx import graph_misra_gries_edge_color as graph_misra_gries_edge_color
 from .rustworkx import graph_bipartite_edge_color as graph_bipartite_edge_color
+from .rustworkx import label_propagation_communities as label_propagation_communities
 from .rustworkx import connected_components as connected_components
 from .rustworkx import is_connected as is_connected
 from .rustworkx import is_strongly_connected as is_strongly_connected
@@ -285,6 +286,124 @@ from .rustworkx import MultiplePathMapping as MultiplePathMapping
 from .rustworkx import AllPairsMultiplePathMapping as AllPairsMultiplePathMapping
 from .rustworkx import PyGraph as PyGraph
 from .rustworkx import PyDiGraph as PyDiGraph
+from .rustworkx import (
+    PyDAG, PyDiGraph, PyGraph, OutDegreeView, InDegreeView, DegreeView,
+    DijkstraError, CentralityMapping, EdgeCentralityMapping, NetworkXKeyError,
+    DisjointSet, ProductNodeMap,
+
+    # Graphs and errors
+    InvalidNode, DAGWouldCycle, DAGHasCycle, NoSuitableNeighbors, NoEdgeBetweenNodes,
+    NoPathFound, InvalidMapping, NullGraph, NegativeCycle, JSONSerializationError,
+    JSONDeserializationError, FailedToConverge, GraphNotBipartite,
+
+    # Connectivity
+    number_connected_components, connected_components, is_connected, node_connected_component,
+    number_weakly_connected_components, weakly_connected_components, is_weakly_connected,
+    number_strongly_connected_components, strongly_connected_components, is_strongly_connected,
+    is_semi_connected,
+
+    # Biconnected
+    biconnected_components, articulation_points, is_biconnected, biconnected_component,
+
+    # Traversal algorithms
+    bfs_successors, bfs_predecessors, graph_dijkstra_search, digraph_dijkstra_search,
+    graph_bfs_search, digraph_bfs_search, edge_bfs, digraph_find_cycle, graph_dfs_search,
+    digraph_dfs_search, digraph_dfs_edges, graph_dfs_edges,
+
+    # Shortest path algorithms
+    digraph_dijkstra_shortest_paths, graph_dijkstra_shortest_paths,
+    graph_dijkstra_shortest_path_lengths, digraph_dijkstra_shortest_path_lengths,
+    digraph_all_pairs_dijkstra_path_lengths, digraph_all_pairs_dijkstra_shortest_paths,
+    graph_all_pairs_dijkstra_path_lengths, graph_all_pairs_dijkstra_shortest_paths,
+    graph_floyd_warshall, digraph_floyd_warshall, graph_floyd_warshall_numpy,
+    digraph_floyd_warshall_numpy, graph_floyd_warshall_successor_and_distance,
+    digraph_floyd_warshall_successor_and_distance, digraph_bellman_ford_shortest_paths,
+    graph_bellman_ford_shortest_paths, digraph_bellman_ford_shortest_path_lengths,
+    graph_bellman_ford_shortest_path_lengths, digraph_all_pairs_bellman_ford_path_lengths,
+    digraph_all_pairs_bellman_ford_shortest_paths, graph_all_pairs_bellman_ford_path_lengths,
+    graph_all_pairs_bellman_ford_shortest_paths, negative_edge_cycle, find_negative_cycle,
+    digraph_astar_shortest_path, graph_astar_shortest_path, graph_has_path, digraph_has_path,
+    graph_all_simple_paths, digraph_all_simple_paths, graph_all_shortest_paths,
+    digraph_all_shortest_paths, graph_all_pairs_all_simple_paths,
+    digraph_all_pairs_all_simple_paths, graph_longest_simple_path, digraph_longest_simple_path,
+    digraph_k_shortest_path_lengths, graph_k_shortest_path_lengths,
+
+    # DAG Algorithms
+    dag_longest_path, dag_longest_path_length, dag_weighted_longest_path,
+    dag_weighted_longest_path_length, topological_sort, topological_generations,
+    lexicographical_topological_sort, is_directed_acyclic_graph, descendants, ancestors,
+    cycle_basis, simple_cycles, dominance_frontiers, immediate_dominators,
+
+    # Centrality
+    digraph_eigenvector_centrality, graph_eigenvector_centrality, digraph_betweenness_centrality,
+    graph_betweenness_centrality, digraph_edge_betweenness_centrality,
+    graph_edge_betweenness_centrality, digraph_closeness_centrality, graph_closeness_centrality,
+    graph_newman_weighted_closeness_centrality, digraph_newman_weighted_closeness_centrality,
+    graph_degree_centrality, digraph_degree_centrality, in_degree_centrality,
+    out_degree_centrality, graph_katz_centrality, digraph_katz_centrality,
+
+    # Graph matrices
+    digraph_adjacency_matrix, graph_adjacency_matrix, graph_distance_matrix,
+    digraph_distance_matrix,
+
+    # Link analysis
+    digraph_pagerank, graph_pagerank, digraph_hits,
+
+    # Isomorphism
+    digraph_is_isomorphic, graph_is_isomorphic, digraph_is_subgraph_isomorphic,
+    graph_is_subgraph_isomorphic, digraph_vf2_mapping, graph_vf2_mapping,
+
+    # Coloring
+    graph_greedy_color, graph_two_color, digraph_two_color, graph_greedy_edge_color,
+    graph_misra_gries_edge_color, graph_bipartite_edge_color, graph_is_bipartite,
+    digraph_is_bipartite,
+    
+    # Community detection
+    label_propagation_communities,
+
+    # Other algorithms
+    transitive_reduction, layers, collect_runs, collect_bicolor_runs, max_weight_matching,
+    is_matching, is_maximal_matching, is_planar, is_planar_kurat, minimum_spanning_edges,
+    minimum_spanning_tree, graph_line_graph, graph_transitivity, digraph_transitivity,
+    graph_token_swapper, graph_core_number, digraph_core_number, graph_complement,
+    digraph_complement, local_complement, digraph_maximum_bisimulation,
+
+    # Tensor product
+    graph_tensor_product, digraph_tensor_product,
+
+    # Cartesian product
+    graph_cartesian_product, digraph_cartesian_product,
+
+    # Union
+    graph_union, digraph_union,
+
+    # Rendering
+    graphviz_draw,
+
+    # Serialization
+    graph_from_dot, digraph_from_dot, graph_to_dot, digraph_to_dot, adjacency_data_to_graph,
+    adjacency_data_to_digraph, graph_to_adjacency_data, digraph_to_adjacency_data,
+    json_graph_schema, json_digraph_schema, graph_to_json_schema, digraph_to_json_schema,
+    json_schema_to_graph, json_schema_to_digraph, graphml_to_digraph, graphml_to_graph,
+    json_to_digraph, json_to_graph, pygraphviz_to_digraph, pygraphviz_to_graph,
+
+    # Random graph generation functions
+    directed_gnp_random_graph, undirected_gnp_random_graph, directed_gnm_random_graph,
+    undirected_gnm_random_graph, undirected_random_bipartite_graph,
+    directed_random_bipartite_graph, undirected_sbm_random_graph, directed_sbm_random_graph,
+    hyperbolic_random_graph, random_geometric_graph, barabasi_albert_graph,
+    directed_barabasi_albert_graph,
+
+    # Layout
+    graph_random_layout, digraph_random_layout, graph_spring_layout,
+    digraph_spring_layout, graph_kamada_kawai_layout, digraph_kamada_kawai_layout,
+    digraph_circular_layout, graph_circular_layout, graph_shell_layout, digraph_shell_layout,
+    graph_bipartite_layout, digraph_bipartite_layout, graph_spiral_layout, digraph_spiral_layout,
+    graph_multipartite_layout, digraph_multipartite_layout,
+
+    # Constants
+    __version__, ColoringStrategy,
+)
 
 _S = TypeVar("_S", default=Any)
 _T = TypeVar("_T", default=Any)

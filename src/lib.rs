@@ -14,6 +14,7 @@ mod bisimulation;
 mod cartesian_product;
 mod centrality;
 mod coloring;
+mod community;
 mod connectivity;
 mod dag_algo;
 mod digraph;
@@ -46,6 +47,7 @@ use bisimulation::*;
 use cartesian_product::*;
 use centrality::*;
 use coloring::*;
+use community::*;
 use connectivity::*;
 use dag_algo::*;
 use dominance::*;
@@ -415,6 +417,19 @@ create_exception!(rustworkx, FailedToConverge, PyException);
 // Graph is not bipartite
 create_exception!(rustworkx, GraphNotBipartite, PyException);
 
+/// Alias for louvain_communities function to maintain compatibility with tests
+#[pyfunction]
+#[pyo3(text_signature = "(graph, /, resolution=1.0, seed=None)")]
+#[pyo3(signature = (graph, resolution=None, seed=None))]
+pub fn label_propagation_communities(
+    py: Python,
+    graph: PyObject,
+    resolution: Option<f64>,
+    seed: Option<u64>,
+) -> PyResult<Vec<Vec<usize>>> {
+    louvain_communities(py, graph, None, resolution.unwrap_or(1.0), 0.0000001, seed, None)
+}
+
 #[pymodule]
 fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -598,6 +613,8 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
+    m.add_function(wrap_pyfunction!(louvain_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::label_propagation_communities, m)?)?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;
@@ -660,5 +677,6 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<iterators::BiconnectedComponents>()?;
     m.add_class::<ColoringStrategy>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
+    
     Ok(())
 }

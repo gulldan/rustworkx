@@ -11,7 +11,6 @@ import os
 from setuptools import setup
 from setuptools_rust import Binding, RustExtension
 
-
 # If RUST_DEBUG is set, force compiling in debug mode. Else, use the default    behavior of whether
 # it's an editable installation.
 rustworkx_debug = True if os.getenv("RUSTWORKX_DEBUG") == "1" else None

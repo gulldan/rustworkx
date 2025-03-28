@@ -731,7 +731,7 @@ def draw_edges(
             mutation_scale=mutation_scale,
             color=arrow_color,
             linewidth=line_width,
-            connectionstyle=f"{connectionstyle}, rad = {rad}",
+            connectionstyle=connectionstyle + f", rad = {rad}",
             linestyle=style,
             zorder=1,
         )  # arrows go behind nodes
