@@ -231,6 +231,87 @@ def save_facebook_network():
         os.remove(facebook_gz)
         print("Converted Facebook network to GML format")
 
+def save_citeseer_network():
+    """Download and save the CiteSeer network in GML format."""
+    output_path = "datasets/citeseer.gml"
+    if not os.path.exists(output_path):
+        # Используем репозиторий vlivashkin/community-graphs
+        download_from_github("gml_graphs", "citeseer.gml", output_path)
+        
+        # Проверяем, что граф правильно загружен и имеет атрибут value
+        G = nx.read_gml(output_path)
+        
+        # Удостоверимся, что каждый узел имеет атрибут value из gt
+        for node in G.nodes():
+            if "value" not in G.nodes[node]:
+                if "gt" in G.nodes[node]:
+                    G.nodes[node]["value"] = G.nodes[node]["gt"]
+                else:
+                    # Значение по умолчанию, если gt отсутствует
+                    G.nodes[node]["value"] = 0 
+        
+        nx.write_gml(G, output_path)
+        print("Processed CiteSeer network")
+    else:
+        print(f"{output_path} already exists")
+
+def save_email_eu_core_network():
+    """Download and save the Email EU Core network in GML format."""
+    output_path = "datasets/email_eu_core.gml"
+    if not os.path.exists(output_path):
+        # Используем репозиторий vlivashkin/community-graphs
+        download_from_github("gml_graphs", "eu-core.gml", output_path)
+        
+        # Проверяем, что граф правильно загружен и имеет атрибут value
+        G = nx.read_gml(output_path)
+        
+        # Удостоверимся, что каждый узел имеет атрибут value из gt
+        for node in G.nodes():
+            if "value" not in G.nodes[node]:
+                if "gt" in G.nodes[node]:
+                    G.nodes[node]["value"] = G.nodes[node]["gt"]
+                else:
+                     # Значение по умолчанию, если gt отсутствует
+                    G.nodes[node]["value"] = 0
+        
+        nx.write_gml(G, output_path)
+        print("Processed Email EU Core network")
+    else:
+        print(f"{output_path} already exists")
+
+def save_orkut_network():
+    """Download Orkut dataset files (edge list and communities) from SNAP."""
+    print("\nProcessing Orkut dataset...")
+    # Edge list
+    download_file(
+        "https://snap.stanford.edu/data/bigdata/communities/com-orkut.ungraph.txt.gz",
+        "datasets/com-orkut.ungraph.txt.gz"
+    )
+    # Communities
+    download_file(
+        "https://snap.stanford.edu/data/bigdata/communities/com-orkut.all.cmty.txt.gz",
+        "datasets/com-orkut.all.cmty.txt.gz"
+    )
+    # Note: These files need to be unzipped manually or by the loader function later
+    print("Orkut dataset files downloaded (remember to unzip them: gunzip datasets/com-orkut.*.gz)")
+
+
+def save_livejournal_network():
+    """Download LiveJournal dataset files (edge list and communities) from SNAP."""
+    print("\nProcessing LiveJournal dataset...")
+    # Edge list
+    download_file(
+        "https://snap.stanford.edu/data/bigdata/communities/com-lj.ungraph.txt.gz",
+        "datasets/com-lj.ungraph.txt.gz"
+    )
+    # Communities
+    download_file(
+        "https://snap.stanford.edu/data/bigdata/communities/com-lj.all.cmty.txt.gz",
+        "datasets/com-lj.all.cmty.txt.gz"
+    )
+    # Note: These files need to be unzipped manually or by the loader function later
+    print("LiveJournal dataset files downloaded (remember to unzip them: gunzip datasets/com-lj.*.gz)")
+
 def main():
     if not os.path.exists("datasets"):
         os.makedirs("datasets")
@@ -241,6 +322,12 @@ def main():
     save_polblogs_network()
     save_cora_network()
     save_facebook_network()
+    save_citeseer_network()  # Добавляем вызов для Citeseer
+    save_email_eu_core_network() # Добавляем вызов для Email-Eu-core
+
+    # Add downloads for large SNAP datasets
+    save_orkut_network()
+    save_livejournal_network()
 
 if __name__ == "__main__":
     main()

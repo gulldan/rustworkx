@@ -615,6 +615,7 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
     m.add_function(wrap_pyfunction!(louvain_communities, m)?)?;
     m.add_function(wrap_pyfunction!(crate::community::label_propagation_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(modularity, m)?)?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;

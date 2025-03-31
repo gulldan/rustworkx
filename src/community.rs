@@ -580,4 +580,95 @@ pub fn label_propagation_communities(
 ) -> PyResult<Vec<Vec<usize>>> {
     // Just use Louvain for now (unweighted)
     louvain_communities(py, graph, None, resolution.unwrap_or(1.0), 0.0000001, seed, None)
+}
+
+/// Calculate the modularity of a graph given a partition.
+///
+/// Modularity is a measure of the quality of a division of a network into
+/// communities. Higher values indicate a better partition.
+///
+/// Args:
+///     graph: The PyGraph object.
+///     partition: A list of lists, where each inner list is a community
+///         represented by a list of node indices.
+///     weight_fn: An optional callable function to get edge weights. If None,
+///         edges are considered unweighted (weight=1.0).
+///     resolution: The resolution parameter for the modularity calculation. 
+///         Defaults to 1.0.
+///
+/// Returns:
+///     The calculated modularity score (float).
+#[pyfunction]
+#[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
+#[pyo3(signature = (graph, partition, weight_fn=None, resolution=1.0))]
+pub fn modularity(
+    py: Python,
+    graph: PyObject,
+    partition: Vec<Vec<usize>>,
+    weight_fn: Option<PyObject>,
+    resolution: Option<f64>,
+) -> PyResult<f64> {
+    // Validate input graph
+    let rx_mod = py.import("rustworkx")?;
+    let py_graph_type = rx_mod.getattr("PyGraph")?;
+    if !graph.bind(py).is_instance(&py_graph_type)? {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Input graph must be a PyGraph instance.",
+        ));
+    }
+    
+    let graph_ref = graph.extract::<PyGraph>(py)?;
+
+    // Handle empty graph
+    if graph_ref.graph.node_count() == 0 {
+        if partition.is_empty() {
+            return Ok(1.0); // Or 0.0? Check convention
+        } else {
+             return Err(pyo3::exceptions::PyValueError::new_err(
+                "Partition must be empty for an empty graph.",
+            ));
+        }
+    }
+
+    // Convert partition (list of lists) to node_to_comm mapping
+    let num_nodes = graph_ref.graph.node_count();
+    let mut node_to_comm = vec![usize::MAX; num_nodes]; // Use usize::MAX as unassigned marker
+    for (comm_id, community) in partition.iter().enumerate() {
+        for &node_index in community {
+            if node_index >= num_nodes {
+                return Err(PyValueError::new_err(format!(
+                    "Node index {} in partition is out of bounds for graph with {} nodes.",
+                    node_index,
+                    num_nodes
+                )));
+            }
+            // Check if node is already assigned to another community
+            if node_to_comm[node_index] != usize::MAX {
+                return Err(PyValueError::new_err(format!(
+                    "Node {} is assigned to multiple communities in the partition.",
+                    node_index
+                )));
+            }
+            node_to_comm[node_index] = comm_id;
+        }
+    }
+
+    // Check if all nodes are assigned (optional, but good practice)
+    if node_to_comm.iter().any(|&c| c == usize::MAX) {
+         return Err(PyValueError::new_err(
+            "Partition does not cover all nodes in the graph.",
+        ));
+    }
+
+    // Convert PyGraph to GraphState
+    let weight_fn_ref = weight_fn.as_ref();
+    let graph_state = GraphState::from_pygraph(py, &graph_ref, weight_fn_ref)?;
+
+    // Get resolution, default to 1.0
+    let resolution_val = resolution.unwrap_or(1.0);
+
+    // Calculate modularity using the existing internal function
+    let modularity_score = calculate_modularity(&graph_state, &node_to_comm, resolution_val);
+
+    Ok(modularity_score)
 } 
