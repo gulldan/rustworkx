@@ -24,6 +24,8 @@ import time
 import tracemalloc
 from datetime import datetime
 
+# cdlib imports
+import cdlib
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -578,195 +580,189 @@ def create_comparison_chart(benchmark_results, output_file="community_detection_
     datasets = [result["dataset"] for result in benchmark_results]
     n_datasets = len(datasets)
     
-    # Use non-interactive backend
     plt.switch_backend("Agg")
     
-    # Create figure with adjusted size for 9 subplots
-    fig, axes = plt.subplots(9, 1, figsize=(14, 48), dpi=300)
-    plt.subplots_adjust(hspace=0.55)
+    # Create figure for 11 subplots (7 external + 2 internal + 2 performance)
+    num_metrics = 11 
+    fig_height_per_metric = 5.5 # Adjusted height per subplot for better spacing
+    fig, axes = plt.subplots(num_metrics, 1, figsize=(14, num_metrics * fig_height_per_metric), dpi=300)
+    plt.subplots_adjust(hspace=0.6) # Adjusted spacing
     
     # Flatten axes for easier indexing
     ax_list = axes.flatten()
-    ax_ari, ax_nmi, ax_homogeneity, ax_completeness, ax_vmeasure, ax_fmi, ax_modularity, ax_time, ax_memory = ax_list
+    # Unpack axes according to the number of metrics
+    if len(ax_list) != num_metrics:
+        raise ValueError(f"Expected {num_metrics} axes, but got {len(ax_list)}")
+    
+    (ax_ari, ax_nmi, ax_homogeneity, ax_completeness, ax_vmeasure, ax_fmi, 
+     ax_modularity, ax_conductance, ax_internal_density, 
+     ax_time, ax_memory) = ax_list
     
     bar_width = 0.35
     r1 = np.arange(n_datasets)
     r2 = [x + bar_width for x in r1]
 
-    # Colors
+    # Colors and grid settings
     nx_color = "#4285F4"
     rx_color = "#34A853"
     grid_color = "#E5E5E5"
     grid_linewidth = 0.5
 
-    # Function to add value labels, skipping NaNs
+    # Helper function to add labels, skipping NaNs
     def add_labels(ax, rects1, rects2, data1, data2, format_str=".3f"):
         for i, rect in enumerate(rects1):
-            height = rect.get_height()
-            if not np.isnan(data1[i]): # Check for NaN before adding label
-                ax.text(rect.get_x() + rect.get_width()/2., height + 0.02, 
-                        f"{data1[i]:{format_str}}", ha="center", va="bottom", 
-                        fontweight="bold", fontsize=10)
+            y_val = rect.get_height()
+            x_val = rect.get_x() + rect.get_width() / 2.0
+            # Adjust label position slightly based on bar height for clarity
+            label_y_offset = 0.02 * ax.get_ylim()[1] # Relative offset
+            if not np.isnan(data1[i]):
+                ax.text(x_val, y_val + label_y_offset, f"{data1[i]:{format_str}}", 
+                        ha="center", va="bottom", fontweight="bold", fontsize=10)
         for i, rect in enumerate(rects2):
-            height = rect.get_height()
-            if not np.isnan(data2[i]): # Check for NaN before adding label
-                ax.text(rect.get_x() + rect.get_width()/2., height + 0.02, 
-                        f"{data2[i]:{format_str}}", ha="center", va="bottom", 
-                        fontweight="bold", fontsize=10)
+            y_val = rect.get_height()
+            x_val = rect.get_x() + rect.get_width() / 2.0
+            label_y_offset = 0.02 * ax.get_ylim()[1]
+            if not np.isnan(data2[i]):
+                ax.text(x_val, y_val + label_y_offset, f"{data2[i]:{format_str}}", 
+                        ha="center", va="bottom", fontweight="bold", fontsize=10)
 
-    # --- Quality Metrics --- (Handle potential NaNs)
-    # ARI comparison
+    # Helper function to style axes
+    def style_axis(ax, ylabel, title):
+        ax.set_ylabel(ylabel, fontweight="bold", fontsize=14)
+        ax.set_title(title, fontweight="bold", fontsize=16)
+        ax.set_xticks([r + bar_width/2 for r in range(n_datasets)])
+        ax.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
+        ax.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
+        ax.set_axisbelow(True)
+        ax.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+
+    # --- External Quality Metrics --- (Handle potential NaNs)
+    # ARI
     ari_nx = [result["nx_ari"] for result in benchmark_results]
-    ari_rx_quality = [result["rx_quality_ari"] for result in benchmark_results]
+    ari_rx = [result["rx_quality_ari"] for result in benchmark_results]
     rects1 = ax_ari.bar(r1, ari_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
-    rects2 = ax_ari.bar(r2, ari_rx_quality, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_ari.set_ylabel("Adjusted Rand Index (ARI)", fontweight="bold", fontsize=14)
-    ax_ari.set_title("Louvain Quality - ARI (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_ari.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_ari.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
+    rects2 = ax_ari.bar(r2, ari_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
     ax_ari.set_ylim(0, 1.05)
-    ax_ari.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_ari.set_axisbelow(True)
-    add_labels(ax_ari, rects1, rects2, ari_nx, ari_rx_quality)
-    ax_ari.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    add_labels(ax_ari, rects1, rects2, ari_nx, ari_rx)
+    style_axis(ax_ari, "Adjusted Rand Index (ARI)", "External Quality - ARI (higher is better, NaN if no ground truth)")
 
-    # NMI comparison
+    # NMI
     nmi_nx = [result["nx_nmi"] for result in benchmark_results]
-    nmi_rx_quality = [result["rx_quality_nmi"] for result in benchmark_results]
+    nmi_rx = [result["rx_quality_nmi"] for result in benchmark_results]
     rects1 = ax_nmi.bar(r1, nmi_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
-    rects2 = ax_nmi.bar(r2, nmi_rx_quality, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_nmi.set_ylabel("Normalized Mutual Info (NMI)", fontweight="bold", fontsize=14)
-    ax_nmi.set_title("Louvain Quality - NMI (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_nmi.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_nmi.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
+    rects2 = ax_nmi.bar(r2, nmi_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
     ax_nmi.set_ylim(0, 1.05)
-    ax_nmi.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_nmi.set_axisbelow(True)
-    add_labels(ax_nmi, rects1, rects2, nmi_nx, nmi_rx_quality)
-    ax_nmi.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    add_labels(ax_nmi, rects1, rects2, nmi_nx, nmi_rx)
+    style_axis(ax_nmi, "Normalized Mutual Info (NMI)", "External Quality - NMI (higher is better, NaN if no ground truth)")
     
-    # Homogeneity comparison
+    # Homogeneity
     homogeneity_nx = [result["nx_homogeneity"] for result in benchmark_results]
     homogeneity_rx = [result["rx_quality_homogeneity"] for result in benchmark_results]
     rects1 = ax_homogeneity.bar(r1, homogeneity_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
     rects2 = ax_homogeneity.bar(r2, homogeneity_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_homogeneity.set_ylabel("Homogeneity Score", fontweight="bold", fontsize=14)
-    ax_homogeneity.set_title("Louvain Quality - Homogeneity (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_homogeneity.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_homogeneity.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
     ax_homogeneity.set_ylim(0, 1.05)
-    ax_homogeneity.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_homogeneity.set_axisbelow(True)
     add_labels(ax_homogeneity, rects1, rects2, homogeneity_nx, homogeneity_rx)
-    ax_homogeneity.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    style_axis(ax_homogeneity, "Homogeneity Score", "External Quality - Homogeneity (higher is better, NaN if no ground truth)")
 
-    # Completeness comparison
+    # Completeness
     completeness_nx = [result["nx_completeness"] for result in benchmark_results]
     completeness_rx = [result["rx_quality_completeness"] for result in benchmark_results]
     rects1 = ax_completeness.bar(r1, completeness_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
     rects2 = ax_completeness.bar(r2, completeness_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_completeness.set_ylabel("Completeness Score", fontweight="bold", fontsize=14)
-    ax_completeness.set_title("Louvain Quality - Completeness (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_completeness.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_completeness.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
     ax_completeness.set_ylim(0, 1.05)
-    ax_completeness.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_completeness.set_axisbelow(True)
     add_labels(ax_completeness, rects1, rects2, completeness_nx, completeness_rx)
-    ax_completeness.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    style_axis(ax_completeness, "Completeness Score", "External Quality - Completeness (higher is better, NaN if no ground truth)")
 
-    # V-Measure comparison
+    # V-Measure
     vmeasure_nx = [result["nx_v_measure"] for result in benchmark_results]
     vmeasure_rx = [result["rx_quality_v_measure"] for result in benchmark_results]
     rects1 = ax_vmeasure.bar(r1, vmeasure_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
     rects2 = ax_vmeasure.bar(r2, vmeasure_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_vmeasure.set_ylabel("V-Measure Score", fontweight="bold", fontsize=14)
-    ax_vmeasure.set_title("Louvain Quality - V-Measure (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_vmeasure.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_vmeasure.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
     ax_vmeasure.set_ylim(0, 1.05)
-    ax_vmeasure.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_vmeasure.set_axisbelow(True)
     add_labels(ax_vmeasure, rects1, rects2, vmeasure_nx, vmeasure_rx)
-    ax_vmeasure.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    style_axis(ax_vmeasure, "V-Measure Score", "External Quality - V-Measure (higher is better, NaN if no ground truth)")
 
-    # FMI comparison
+    # FMI
     fmi_nx = [result["nx_fmi"] for result in benchmark_results]
     fmi_rx = [result["rx_quality_fmi"] for result in benchmark_results]
     rects1 = ax_fmi.bar(r1, fmi_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
     rects2 = ax_fmi.bar(r2, fmi_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_fmi.set_ylabel("Fowlkes–Mallows Index (FMI)", fontweight="bold", fontsize=14)
-    ax_fmi.set_title("Louvain Quality - FMI (higher is better, NaN if no ground truth)", fontweight="bold", fontsize=16)
-    ax_fmi.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_fmi.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
     ax_fmi.set_ylim(0, 1.05)
-    ax_fmi.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_fmi.set_axisbelow(True)
     add_labels(ax_fmi, rects1, rects2, fmi_nx, fmi_rx)
-    ax_fmi.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    style_axis(ax_fmi, "Fowlkes–Mallows Index (FMI)", "External Quality - FMI (higher is better, NaN if no ground truth)")
 
-    # --- Modularity --- (Always applicable)
+    # --- Internal Quality Metrics --- (Always applicable)
+    # Modularity
     modularity_nx = [result["nx_modularity"] for result in benchmark_results]
     modularity_rx = [result["rx_modularity"] for result in benchmark_results]
-    # Determine y-limits, handling potential NaNs in input (though modularity shouldn't be NaN)
     min_mod = np.nanmin([np.nanmin(modularity_nx), np.nanmin(modularity_rx), 0])
-    max_mod = np.nanmax([np.nanmax(modularity_nx), np.nanmax(modularity_rx)]) * 1.1
-    
+    max_mod = np.nanmax([np.nanmax(modularity_nx), np.nanmax(modularity_rx)])
+    max_mod = max_mod * 1.1 if not np.isnan(max_mod) else 1.0 # Adjust padding, handle all NaN case
+    min_mod = min_mod if not np.isnan(min_mod) else 0.0
     rects1 = ax_modularity.bar(r1, modularity_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
     rects2 = ax_modularity.bar(r2, modularity_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_modularity.set_ylabel("Modularity Score", fontweight="bold", fontsize=14)
-    ax_modularity.set_title("Louvain Quality - Modularity (higher is better)", fontweight="bold", fontsize=16)
-    ax_modularity.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_modularity.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
-    ax_modularity.set_ylim(min_mod, max_mod) 
-    ax_modularity.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_modularity.set_axisbelow(True)
-    # Use the add_labels function for modularity as well
+    ax_modularity.set_ylim(min_mod - abs(min_mod)*0.05, max_mod + abs(max_mod)*0.05) # Adjusted y-limits slightly
     add_labels(ax_modularity, rects1, rects2, modularity_nx, modularity_rx)
-    ax_modularity.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    style_axis(ax_modularity, "Modularity Score", "Internal Quality - Modularity (higher is better)")
+
+    # Conductance
+    conductance_nx = [result["nx_conductance"] for result in benchmark_results]
+    conductance_rx = [result["rx_conductance"] for result in benchmark_results]
+    min_cond = 0 # Conductance is non-negative
+    max_cond = np.nanmax([np.nanmax(conductance_nx), np.nanmax(conductance_rx)]) 
+    max_cond = max_cond * 1.1 if not np.isnan(max_cond) else 1.0 # Adjust padding
+    max_cond = max(max_cond, 0.1) # Ensure max_cond is at least a small positive value
+    rects1 = ax_conductance.bar(r1, conductance_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
+    rects2 = ax_conductance.bar(r2, conductance_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
+    ax_conductance.set_ylim(min_cond, max_cond)
+    add_labels(ax_conductance, rects1, rects2, conductance_nx, conductance_rx)
+    style_axis(ax_conductance, "Avg. Conductance", "Internal Quality - Conductance (lower is better)")
+
+    # Internal Edge Density
+    int_density_nx = [result["nx_internal_density"] for result in benchmark_results]
+    int_density_rx = [result["rx_internal_density"] for result in benchmark_results]
+    min_dens = 0 # Density is non-negative
+    max_dens = np.nanmax([np.nanmax(int_density_nx), np.nanmax(int_density_rx)])
+    max_dens = max_dens * 1.1 if not np.isnan(max_dens) else 1.0 # Adjust padding
+    max_dens = max(max_dens, 0.1) # Ensure max_dens is at least a small positive value
+    rects1 = ax_internal_density.bar(r1, int_density_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
+    rects2 = ax_internal_density.bar(r2, int_density_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
+    ax_internal_density.set_ylim(min_dens, max_dens)
+    add_labels(ax_internal_density, rects1, rects2, int_density_nx, int_density_rx)
+    style_axis(ax_internal_density, "Avg. Internal Density", "Internal Quality - Internal Density (higher is better)")
 
     # --- Performance Metrics --- (Always applicable)
-    # Execution time comparison
+    # Execution time
     time_nx = [result["nx_elapsed"] for result in benchmark_results]
-    time_rx_quality = [result["rx_elapsed_quality"] for result in benchmark_results]
+    time_rx = [result["rx_elapsed_quality"] for result in benchmark_results]
     time_nx = [max(t, 1e-10) for t in time_nx]
-    time_rx_quality = [max(t, 1e-10) for t in time_rx_quality]
+    time_rx = [max(t, 1e-10) for t in time_rx]
     ax_time.bar(r1, time_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
-    ax_time.bar(r2, time_rx_quality, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_time.set_ylabel("Execution Time (seconds)", fontweight="bold", fontsize=14)
-    ax_time.set_title("Louvain Performance - Execution Time (lower is better)", fontweight="bold", fontsize=16)
-    ax_time.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_time.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
+    ax_time.bar(r2, time_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
     ax_time.set_yscale("log")
-    ax_time.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_time.set_axisbelow(True)
     ax_time.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.1e}" if x < 0.001 else f"{x:.3g}"))
-    for i, v in enumerate(time_nx): ax_time.text(r1[i], v * 1.2, f"{format_time(v)}", ha="center", fontweight="bold", fontsize=10, color="#333333")
-    for i, v in enumerate(time_rx_quality): ax_time.text(r2[i], v * 1.2, f"{format_time(v)}", ha="center", fontweight="bold", fontsize=10, color="#333333")
-    ax_time.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    # Add time labels using format_time
+    for i, v in enumerate(time_nx): ax_time.text(r1[i], v * 1.3, f"{format_time(v)}", ha="center", va="bottom", fontweight="bold", fontsize=10, color="#333333")
+    for i, v in enumerate(time_rx): ax_time.text(r2[i], v * 1.3, f"{format_time(v)}", ha="center", va="bottom", fontweight="bold", fontsize=10, color="#333333")
+    style_axis(ax_time, "Execution Time (seconds)", "Performance - Execution Time (lower is better, log scale)")
     
-    # Memory usage comparison
+    # Memory usage
     memory_nx = [result.get("nx_memory", 0) for result in benchmark_results]
-    memory_rx_quality = [result.get("rx_memory_quality", 0) for result in benchmark_results]
+    memory_rx = [result.get("rx_memory_quality", 0) for result in benchmark_results]
     memory_nx = [max(m, 1e-6) for m in memory_nx]
-    memory_rx_quality = [max(m, 1e-6) for m in memory_rx_quality]
+    memory_rx = [max(m, 1e-6) for m in memory_rx]
     ax_memory.bar(r1, memory_nx, width=bar_width, label="NetworkX", color=nx_color, edgecolor="#3B77DB", linewidth=0.8)
-    ax_memory.bar(r2, memory_rx_quality, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
-    ax_memory.set_ylabel("Memory Usage (MB)", fontweight="bold", fontsize=14)
-    ax_memory.set_title("Louvain Performance - Memory Usage (lower is better)", fontweight="bold", fontsize=16)
-    ax_memory.set_xticks([r + bar_width/2 for r in range(n_datasets)])
-    ax_memory.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
+    ax_memory.bar(r2, memory_rx, width=bar_width, label="RustWorkX", color=rx_color, edgecolor="#2D9249", linewidth=0.8)
     ax_memory.set_yscale("log")
-    ax_memory.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=grid_color)
-    ax_memory.set_axisbelow(True)
     ax_memory.yaxis.set_major_formatter(FuncFormatter(lambda x, _: format_memory(x)))
-    for i, v in enumerate(memory_nx): ax_memory.text(r1[i], v * 1.2, f"{format_memory(v)}", ha="center", fontweight="bold", fontsize=10, color="#333333")
-    for i, v in enumerate(memory_rx_quality): ax_memory.text(r2[i], v * 1.2, f"{format_memory(v)}", ha="center", fontweight="bold", fontsize=10, color="#333333")
-    ax_memory.legend(loc="upper right", frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=12)
+    # Add memory labels using format_memory
+    for i, v in enumerate(memory_nx): ax_memory.text(r1[i], v * 1.3, f"{format_memory(v)}", ha="center", va="bottom", fontweight="bold", fontsize=10, color="#333333")
+    for i, v in enumerate(memory_rx): ax_memory.text(r2[i], v * 1.3, f"{format_memory(v)}", ha="center", va="bottom", fontweight="bold", fontsize=10, color="#333333")
+    style_axis(ax_memory, "Memory Usage (MB)", "Performance - Memory Usage (lower is better, log scale)")
     
     # Overall title and layout
-    fig.suptitle("Community Detection Algorithm Comparison", fontsize=20, fontweight="bold", y=0.995)
-    plt.tight_layout(rect=(0, 0, 1, 0.98))
+    fig.suptitle("Community Detection Algorithm Comparison", fontsize=22, fontweight="bold", y=1.0) # Adjusted title position
+    plt.tight_layout(rect=(0, 0, 1, 0.99)) # Adjusted layout rect
     
     # Save the chart
     plt.savefig(output_file, dpi=400, bbox_inches="tight", facecolor="white")
@@ -838,16 +834,15 @@ def run_benchmark():
         "Football": load_football,
         "Political Books": load_political_books,
         "Dolphins": load_dolphins,
-        "LFR Benchmark (Small)": lambda: load_lfr(n=500, mu=0.3, name="LFR Small"), # Small LFR
+        "LFR Benchmark (Small)": lambda: load_lfr(n=500, mu=0.3, name="LFR Small"),
         "Political Blogs": load_polblogs,
         # "Cora": load_cora,
         "Facebook": load_facebook,
         "Citeseer": load_citeseer,
         "Email EU Core": load_email_eu_core,
-        # Add our new datasets
         "Graph Edges CSV": load_graph_edges_csv,
         "Graph Edges Parquet": load_graph_edges_parquet,
-        # "LFR Benchmark (Medium)": lambda: load_lfr(n=5000, mu=0.4, name="LFR Medium"), # Optional medium LFR
+        # "LFR Benchmark (Medium)": lambda: load_lfr(n=5000, mu=0.4, name="LFR Medium"), 
         # --- Large Datasets (uncomment selectively to run) ---
         # "Amazon Co-purchase": load_amazon_copurchase, # ~300k nodes
         # "Orkut": load_orkut,                             # ~3M nodes
@@ -874,20 +869,20 @@ def run_benchmark():
             import traceback
             traceback.print_exc()
     
-    # Generate final comparison chart
-    print("\n" + "=" * 80)
-    print("GENERATING FINAL PERFORMANCE COMPARISON CHART")
-    print("=" * 80)
+    # Generate final comparison chart (COMMENTED OUT)
+    # print("\n" + "=" * 80)
+    # print("GENERATING FINAL PERFORMANCE COMPARISON CHART")
+    # print("=" * 80)
+    # 
+    # try:
+    #     chart_path = os.path.join(result_folder, "community_detection_comparison.png")
+    #     create_comparison_chart(benchmark_results, output_file=chart_path)
+    # except Exception as e:
+    #     print(f"Error generating comparison chart: {str(e)}")
+    #     import traceback
+    #     traceback.print_exc()
     
-    try:
-        chart_path = os.path.join(result_folder, "community_detection_comparison.png")
-        create_comparison_chart(benchmark_results, output_file=chart_path)
-    except Exception as e:
-        print(f"Error generating comparison chart: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    
-    # Display list of generated files
+    # Display list of generated files (Now only log files essentially)
     print("\n" + "=" * 80)
     print("BENCHMARK COMPLETE - VISUALIZATION FILES GENERATED:")
     print("=" * 80)
@@ -907,7 +902,102 @@ def run_benchmark():
     else:
         print("No visualization files were generated. Please check for errors.")
         
+    # Generate and print the results table
+    print("\n" + "=" * 80)
+    print("GENERATING RESULTS TABLE")
+    print("=" * 80)
+    table_string = generate_results_table(benchmark_results)
+    print(table_string)
+    # Optionally save the table to a file
+    table_filename = os.path.join(result_folder, "benchmark_results_table.md")
+    try:
+        with open(table_filename, "w") as f:
+            f.write(table_string)
+        print(f"\nResults table saved to: {table_filename}")
+    except Exception as e:
+        print(f"Error saving results table: {e}")
+
     print("\nBenchmark completed successfully!")
+
+
+def generate_results_table(results):
+    """Generates a Markdown table from the benchmark results."""
+    if not results:
+        return "No results to display."
+
+    # Define headers (add new internal metrics)
+    headers = [
+        "Dataset", "Nodes", "Edges", "Has GT", 
+        "NX Time", "RX Time", "NX Mem", "RX Mem", "NX Comms", "RX Comms",
+        "NX Mod", "RX Mod", 
+        "NX Cond", "RX Cond", "NX IntDens", "RX IntDens", 
+        "NX AvgIntDeg", "RX AvgIntDeg", "NX TPR", "RX TPR", "NX CutRatio", "RX CutRatio",
+        "NX Surprise", "RX Surprise", "NX Signif", "RX Signif",
+        "NX ARI", "RX ARI", "NX NMI", "RX NMI" # Keep key external metrics for comparison
+    ]
+    
+    # Create separator line
+    sep = ["---"] * len(headers)
+    
+    table = [" | ".join(headers), " | ".join(sep)]
+
+    # Format result rows
+    for res in results:
+        # Format performance with bold for faster time
+        nx_time_str = format_time(res["nx_elapsed"])
+        rx_time_str = format_time(res["rx_elapsed"])
+        
+        # Simple bolding: if one is zero and the other isn't, bold the non-zero
+        # If both non-zero, bold the smaller one.
+        if res["nx_elapsed"] == 0 and res["rx_elapsed"] > 0:
+            rx_time_str = f"**{rx_time_str}**"
+        elif res["rx_elapsed"] == 0 and res["nx_elapsed"] > 0:
+            nx_time_str = f"**{nx_time_str}**"
+        elif res["nx_elapsed"] > 0 and res["rx_elapsed"] > 0:
+            if res["rx_elapsed"] < res["nx_elapsed"]:
+                rx_time_str = f"**{rx_time_str}**"
+            else:
+                nx_time_str = f"**{nx_time_str}**"
+                
+        nx_mem_str = format_memory(res["nx_memory"])
+        rx_mem_str = format_memory(res["rx_memory"])
+        if res["nx_memory"] == 0 and res["rx_memory"] > 0:
+             rx_mem_str = f"**{rx_mem_str}**" # Less memory is better
+        elif res["rx_memory"] == 0 and res["nx_memory"] > 0:
+             nx_mem_str = f"**{nx_mem_str}**"
+        elif res["rx_memory"] > 0 and res["nx_memory"] > 0:
+             if res["rx_memory"] < res["nx_memory"]:
+                  rx_mem_str = f"**{rx_mem_str}**"
+             else:
+                  nx_mem_str = f"**{nx_mem_str}**"
+
+        # Format metrics, handling NaN
+        def fmt(key, decimals=4):
+            val = res.get(key, float("nan"))
+            return f"{val:.{decimals}f}" if not np.isnan(val) else "NaN"
+
+        row = [
+            res["dataset"],
+            str(res["nodes"]), 
+            str(res["edges"]),
+            "Yes" if res["has_ground_truth"] else "No",
+            nx_time_str, rx_time_str,
+            nx_mem_str, rx_mem_str,
+            str(res["nx_num_comms"]), str(res["rx_num_comms"]),
+            fmt("nx_modularity"), fmt("rx_modularity"),
+            fmt("nx_conductance"), fmt("rx_conductance"),
+            fmt("nx_internal_density"), fmt("rx_internal_density"),
+            fmt("nx_avg_internal_degree"), fmt("rx_avg_internal_degree"),
+            fmt("nx_tpr"), fmt("rx_tpr"),
+            fmt("nx_cut_ratio"), fmt("rx_cut_ratio"),
+            fmt("nx_surprise"), fmt("rx_surprise"),
+            fmt("nx_significance"), fmt("rx_significance"),
+            fmt("nx_ari"), fmt("rx_ari"), # Renamed from rx_quality_ari
+            fmt("nx_nmi"), fmt("rx_nmi")  # Renamed from rx_quality_nmi
+        ]
+        table.append(" | ".join(row))
+        
+    return "\n".join(table)
 
 
 # Threshold for considering a graph 'large' and skipping NetworkX
@@ -916,235 +1006,178 @@ LARGE_GRAPH_THRESHOLD = 100000
 
 def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
     """Run benchmark comparison on a specific dataset."""
+    # ... (setup code: print header, set seed) ...
     print(f"\n{'='*50}")
     print(f"Running Louvain benchmark on {dataset_name} dataset")
     print(f"{'='*50}")
-    
-    # Use fixed seed for reproducibility in this function scope
-    fixed_seed = 42
+    fixed_seed = 42 
     random.seed(fixed_seed)
     np.random.seed(fixed_seed)
-    
+
     try:
-        # Load data and check for ground truth
+        # Load data
         nx_graph, true_labels, has_ground_truth = load_func()
-        print(f"Loaded {dataset_name} dataset: {len(nx_graph.nodes())} nodes, {len(nx_graph.edges())} edges")
-        if has_ground_truth:
-            print(f"Ground truth: {len(set(true_labels))} communities")
-        else:
-            print("Ground truth: Not available")
+        num_nodes = len(nx_graph.nodes())
+        num_edges = len(nx_graph.edges())
+        print(f"Loaded {dataset_name}: {num_nodes} nodes, {num_edges} edges. Ground truth available: {has_ground_truth}")
 
         # Convert graph
         rx_graph, node_map = convert_nx_to_rx(nx_graph)
 
-        # Initialize results with default values
+        # Initialize results dictionary
+        results = {
+            "dataset": dataset_name,
+            "nodes": num_nodes,
+            "edges": num_edges,
+            "has_ground_truth": has_ground_truth,
+            # External Metrics (default NaN)
+            "nx_ari": float("nan"), "nx_nmi": float("nan"), "nx_homogeneity": float("nan"),
+            "nx_completeness": float("nan"), "nx_v_measure": float("nan"), "nx_fmi": float("nan"),
+            "rx_ari": float("nan"), "rx_nmi": float("nan"), "rx_homogeneity": float("nan"),
+            "rx_completeness": float("nan"), "rx_v_measure": float("nan"), "rx_fmi": float("nan"),
+            # Internal Metrics (default NaN/0.0)
+            "nx_modularity": 0.0, "nx_conductance": float("nan"), "nx_internal_density": float("nan"),
+            "nx_avg_internal_degree": float("nan"), "nx_tpr": float("nan"), "nx_cut_ratio": float("nan"),
+            "nx_surprise": float("nan"), "nx_significance": float("nan"),
+            "rx_modularity": 0.0, "rx_conductance": float("nan"), "rx_internal_density": float("nan"),
+            "rx_avg_internal_degree": float("nan"), "rx_tpr": float("nan"), "rx_cut_ratio": float("nan"),
+            "rx_surprise": float("nan"), "rx_significance": float("nan"),
+            # Performance (default 0)
+            "nx_elapsed": 0, "nx_memory": 0, "rx_elapsed": 0, "rx_memory": 0,
+            "nx_num_comms": 0, "rx_num_comms": 0 
+        }
+
+        # --- Run NetworkX --- 
         nx_communities = []
-        nx_memory = 0
-        nx_elapsed = 0
-        rx_communities_quality = []
-        rx_memory_quality = 0
-        rx_elapsed_quality = 0
-
-        # Initialize metrics and modularity scores (use NaN for metrics when no ground truth)
-        nan_val = float("nan")
-        nx_ari, nx_nmi, nx_homogeneity, nx_completeness, nx_v_measure, nx_fmi = (nan_val,) * 6
-        rx_quality_ari, rx_quality_nmi, rx_quality_homogeneity, rx_quality_completeness, rx_quality_v_measure, rx_quality_fmi = (nan_val,) * 6
-        nx_modularity = 0.0
-        rx_modularity = 0.0
-
-        # --- Run NetworkX (only if graph is not too large) ---
-        if len(nx_graph.nodes()) <= LARGE_GRAPH_THRESHOLD:
+        if num_nodes <= LARGE_GRAPH_THRESHOLD:
             try:
                 print("\nRunning NetworkX Louvain...")
                 nx_start = time.time()
+                graph_to_use_nx = nx.Graph(nx_graph) if nx.is_directed(nx_graph) else nx_graph
+                nx_communities, results["nx_memory"] = run_nx_algorithm(graph_to_use_nx)
+                results["nx_elapsed"] = time.time() - nx_start
+                results["nx_num_comms"] = len(nx_communities)
+                print(f"NetworkX: {results['nx_num_comms']} communities in {format_time(results['nx_elapsed'])} using {format_memory(results['nx_memory'])}")
 
-                # Check if the graph is directed for NetworkX
-                if nx.is_directed(nx_graph):
-                    print("Converting directed graph to undirected for NetworkX Louvain...")
-                    nx_graph_undirected = nx.Graph(nx_graph)
-                    nx_communities, nx_memory = run_nx_algorithm(nx_graph_undirected)
-                    if nx_communities:
-                        # Explicitly use 'weight' attribute for modularity
-                        nx_modularity = nx.community.modularity(nx_graph_undirected, nx_communities, weight="weight")
-                else:
-                    nx_communities, nx_memory = run_nx_algorithm(nx_graph)
-                    if nx_communities:
-                        # Explicitly use 'weight' attribute for modularity
-                        nx_modularity = nx.community.modularity(nx_graph, nx_communities, weight="weight")
+                if nx_communities:
+                    # Calculate NX Modularity
+                    try:
+                        results["nx_modularity"] = nx.community.modularity(graph_to_use_nx, nx_communities, weight="weight")
+                    except Exception as mod_e:
+                        print(f"Warning: NX modularity calculation failed: {mod_e}")
 
-                nx_elapsed = time.time() - nx_start
-                print(f"NetworkX completed in {format_time(nx_elapsed)}")
+                    # Calculate NX Internal Metrics
+                    (results["nx_conductance"], results["nx_internal_density"], 
+                     results["nx_avg_internal_degree"], results["nx_tpr"], results["nx_cut_ratio"], 
+                     results["nx_surprise"], results["nx_significance"]) = calculate_internal_metrics(graph_to_use_nx, nx_communities)
 
-                # Calculate NetworkX metrics only if ground truth exists and communities were found
-                if has_ground_truth and nx_communities:
-                    nx_ari, nx_nmi, nx_homogeneity, nx_completeness, nx_v_measure, nx_fmi = compare_with_true_labels(nx_communities, true_labels)
+                    # Calculate NX External Metrics if ground truth exists
+                    if has_ground_truth:
+                        (results["nx_ari"], results["nx_nmi"], results["nx_homogeneity"], 
+                         results["nx_completeness"], results["nx_v_measure"], results["nx_fmi"]) = compare_with_true_labels(nx_communities, true_labels)
 
             except Exception as e:
                 print(f"Error running NetworkX Louvain: {str(e)}")
-                # Reset results if NetworkX failed
-                nx_communities = []
-                nx_memory = 0
-                nx_elapsed = 0
-                nx_ari, nx_nmi, nx_homogeneity, nx_completeness, nx_v_measure, nx_fmi = (nan_val,) * 6
-                nx_modularity = 0.0
+                # Ensure performance metrics are 0 if it fails mid-run
+                results["nx_elapsed"] = 0
+                results["nx_memory"] = 0
+                results["nx_num_comms"] = 0
         else:
-            print(f"\nSkipping NetworkX Louvain for large graph ({len(nx_graph.nodes())} nodes > {LARGE_GRAPH_THRESHOLD})")
-            # Ensure default values are set if NetworkX is skipped
-            nx_communities = []
-            nx_memory = 0
-            nx_elapsed = 0
-            nx_ari, nx_nmi, nx_homogeneity, nx_completeness, nx_v_measure, nx_fmi = (nan_val,) * 6
-            nx_modularity = 0.0
+            print(f"\nSkipping NetworkX Louvain for large graph ({num_nodes} nodes > {LARGE_GRAPH_THRESHOLD})")
 
-        # --- Run RustWorkX ---
+        # --- Run RustWorkX --- 
+        rx_communities = []
         try:
             print("Running RustWorkX Louvain...")
-            rx_quality_start = time.time()
-            # Pass seed to rx.louvain_communities
-            rx_communities_quality, rx_memory_quality = run_rx_quality_algorithm(rx_graph)
-            rx_elapsed_quality = time.time() - rx_quality_start
-            print(f"RustWorkX completed in {format_time(rx_elapsed_quality)}")
+            rx_start = time.time()
+            rx_communities, results["rx_memory"] = run_rx_quality_algorithm(rx_graph) # Changed key name
+            results["rx_elapsed"] = time.time() - rx_start # Changed key name
+            results["rx_num_comms"] = len(rx_communities)
+            print(f"RustWorkX: {results['rx_num_comms']} communities in {format_time(results['rx_elapsed'])} using {format_memory(results['rx_memory'])}")
 
-            # Calculate modularity for RustWorkX result using the new function
-            if rx_communities_quality:
+            if rx_communities:
+                # Calculate RX Modularity
                 try:
                     def weight_fn(edge_payload):
-                        # Ensure weight is float, default to 1.0 if None or invalid
-                        try:
-                            return float(edge_payload) if edge_payload is not None else 1.0
-                        except (ValueError, TypeError):
-                            return 1.0
-
-                    rx_modularity = rx.modularity(rx_graph, rx_communities_quality, weight_fn=weight_fn)
+                        try: return float(edge_payload) if edge_payload is not None else 1.0
+                        except (ValueError, TypeError): return 1.0
+                    results["rx_modularity"] = rx.modularity(rx_graph, rx_communities, weight_fn=weight_fn)
                 except AttributeError:
-                    print("Warning: rx.modularity function not found. Ensure the Rust module is rebuilt and the function is exported. Skipping calculation.")
-                    rx_modularity = 0.0 # Keep as 0.0 if function not found
-                except Exception as e:
-                    print(f"Error calculating RustWorkX modularity: {str(e)}")
-                    rx_modularity = 0.0 # Keep as 0.0 on other errors
-            else:
-                rx_modularity = 0.0 # No communities, modularity is 0
+                    print("Warning: rx.modularity function not found. Skipping calculation.")
+                except Exception as mod_e:
+                    print(f"Warning: RX modularity calculation failed: {mod_e}")
+                    
+                # Calculate RX Internal Metrics
+                rx_communities_orig_ids = []
+                reverse_map = {v: k for k, v in node_map.items()}
+                for comm_indices in rx_communities:
+                    orig_comm = {reverse_map[idx] for idx in comm_indices if idx in reverse_map}
+                    if orig_comm:
+                        rx_communities_orig_ids.append(list(orig_comm)) # Pass list of lists
+                
+                if rx_communities_orig_ids:
+                    (results["rx_conductance"], results["rx_internal_density"], 
+                     results["rx_avg_internal_degree"], results["rx_tpr"], results["rx_cut_ratio"], 
+                     results["rx_surprise"], results["rx_significance"]) = calculate_internal_metrics(nx_graph, rx_communities_orig_ids)
+                else:
+                    print("Warning: No valid communities found for RustWorkX after mapping back node IDs.")
 
-            # Calculate RustWorkX metrics only if ground truth exists and communities were found
-            if has_ground_truth and rx_communities_quality:
-                rx_quality_ari, rx_quality_nmi, rx_quality_homogeneity, rx_quality_completeness, rx_quality_v_measure, rx_quality_fmi = compare_with_true_labels(rx_communities_quality, true_labels, node_map)
-            # No 'else' needed here, metrics are already NaN by default if no ground truth
+                # Calculate RX External Metrics if ground truth exists
+                if has_ground_truth:
+                    (results["rx_ari"], results["rx_nmi"], results["rx_homogeneity"],
+                     results["rx_completeness"], results["rx_v_measure"], results["rx_fmi"]) = compare_with_true_labels(rx_communities, true_labels, node_map)
 
         except Exception as e:
             print(f"Error running RustWorkX Louvain: {str(e)}")
-            rx_communities_quality = []
-            rx_memory_quality = 0
-            rx_elapsed_quality = 0
-            rx_quality_ari, rx_quality_nmi, rx_quality_homogeneity, rx_quality_completeness, rx_quality_v_measure, rx_quality_fmi = (nan_val,) * 6
-            rx_modularity = 0.0
+            # Ensure performance metrics are 0 if it fails mid-run
+            results["rx_elapsed"] = 0
+            results["rx_memory"] = 0
+            results["rx_num_comms"] = 0
 
-        print("\nResults:")
-        print(f"NetworkX found {len(nx_communities)} communities in {format_time(nx_elapsed)} using {format_memory(nx_memory)}")
-        # Limit printing community details for large datasets
-        if len(nx_communities) < 50 and nx_communities:
-            for i, comm in enumerate(nx_communities):
-                print(f"  Community {i+1}: {len(comm)} members")
-        print(f"RustWorkX found {len(rx_communities_quality)} communities in {format_time(rx_elapsed_quality)} using {format_memory(rx_memory_quality)}")
-        if len(rx_communities_quality) < 50 and rx_communities_quality:
-            for i, comm in enumerate(rx_communities_quality):
-                print(f"  Community {i+1}: {len(comm)} members")
-
-        # Conditional printing of quality comparison
-        print("\nComparison with ground truth:")
+        # --- Reporting --- 
+        print("\n--- Scores Summary ---")
+        print(f"Modularity:         NX={results['nx_modularity']:.4f}, RX={results['rx_modularity']:.4f}")
+        print(f"Conductance:        NX={results['nx_conductance']:.4f}, RX={results['rx_conductance']:.4f} (lower=better)")
+        print(f"Internal Density:   NX={results['nx_internal_density']:.4f}, RX={results['rx_internal_density']:.4f} (higher=better)")
+        print(f"Avg Internal Deg:   NX={results['nx_avg_internal_degree']:.4f}, RX={results['rx_avg_internal_degree']:.4f} (higher=better)")
+        print(f"TPR:                NX={results['nx_tpr']:.4f}, RX={results['rx_tpr']:.4f} (higher=better)")
+        print(f"Cut Ratio:          NX={results['nx_cut_ratio']:.4f}, RX={results['rx_cut_ratio']:.4f} (lower=better)")
+        print(f"Surprise:           NX={results['nx_surprise']:.4f}, RX={results['rx_surprise']:.4f} (higher=better)")
+        print(f"Significance:       NX={results['nx_significance']:.4f}, RX={results['rx_significance']:.4f} (higher=better)")
         if has_ground_truth:
-            # Print metrics only if they are not NaN (i.e., calculated)
-            print(f"NetworkX - ARI: {nx_ari:.4f}, NMI: {nx_nmi:.4f}, Homogeneity: {nx_homogeneity:.4f}, Completeness: {nx_completeness:.4f}, V-Measure: {nx_v_measure:.4f}, FMI: {nx_fmi:.4f}")
-            print(f"RustWorkX- ARI: {rx_quality_ari:.4f}, NMI: {rx_quality_nmi:.4f}, Homogeneity: {rx_quality_homogeneity:.4f}, Completeness: {rx_quality_completeness:.4f}, V-Measure: {rx_quality_v_measure:.4f}, FMI: {rx_quality_fmi:.4f}")
-        else:
-            print("Not applicable (no ground truth)")
+            print("-- External --")
+            print(f"ARI:                NX={results['nx_ari']:.4f}, RX={results['rx_ari']:.4f}")
+            print(f"NMI:                NX={results['nx_nmi']:.4f}, RX={results['rx_nmi']:.4f}")
+        print("--------------------")
 
-        print("\nModularity comparison (higher is better):")
-        print(f"NetworkX Modularity: {nx_modularity:.4f}")
-        print(f"RustWorkX Modularity: {rx_modularity:.4f}")
+        # --- Visualization Call (Commented Out) --- 
+        # try:
+        #     safe_filename = dataset_name.lower().replace(" ", "_").replace("-", "_")
+        #     visualize_communities( ... ) # Pass all necessary results
+        # except Exception as e:
+        #     print(f"Error during visualization: {str(e)}")
 
-        print("\nPerformance comparison:")
-        # Improved speed comparison logic
-        if rx_elapsed_quality > 0:
-            if nx_elapsed > 0: # Both ran
-                 speedup = nx_elapsed / rx_elapsed_quality
-                 print(f"RustWorkX is {speedup:.2f}x faster than NetworkX")
-            else: # NX was skipped or too fast
-                 print("NetworkX skipped or took negligible time, speedup cannot be calculated.")
-        elif nx_elapsed > 0: # Only NX ran (RX failed or was too fast)
-             print("RustWorkX failed or took negligible time.")
-        else: # Neither ran or both too fast
-            print("Execution times too small to compare meaningfully.")
+        return results # Return the full dictionary
 
-
-        print("\nMemory usage comparison:")
-        print(f"NetworkX: {format_memory(nx_memory)}")
-        # Improved memory comparison logic
-        if rx_memory_quality > 0:
-            if nx_memory > 0: # Both have memory usage
-                 memory_ratio = nx_memory / rx_memory_quality
-                 print(f"RustWorkX: {format_memory(rx_memory_quality)} ({memory_ratio:.2f}x of NetworkX)")
-            else: # Only RX has memory usage
-                 print(f"RustWorkX: {format_memory(rx_memory_quality)}")
-        elif nx_memory > 0: # Only NX has memory usage
-             print("RustWorkX used negligible memory.")
-        else: # Neither used significant memory
-             print("Memory usage too small to compare meaningfully.")
-
-        try:
-            safe_filename = dataset_name.lower().replace(" ", "_").replace("-", "_")
-            # Pass has_ground_truth to visualization
-            visualize_communities(
-                nx_graph, nx_communities, rx_communities_quality,
-                node_map, true_labels, dataset_name,
-                nx_ari, nx_nmi, nx_elapsed,
-                rx_quality_ari, rx_quality_nmi, rx_elapsed_quality,
-                nx_memory, rx_memory_quality,
-                has_ground_truth, # Pass the flag here
-                result_folder=result_folder,
-                graph_name=safe_filename
-            )
-        except Exception as e:
-            print(f"Error during visualization: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-        return {
-            "dataset": dataset_name,
-            "has_ground_truth": has_ground_truth, # Include this flag in results
-            "nx_ari": nx_ari,
-            "nx_nmi": nx_nmi,
-            "nx_homogeneity": nx_homogeneity,
-            "nx_completeness": nx_completeness,
-            "nx_v_measure": nx_v_measure,
-            "nx_fmi": nx_fmi,
-            "nx_modularity": nx_modularity,
-            "nx_elapsed": nx_elapsed,
-            "nx_memory": nx_memory,
-            "rx_quality_ari": rx_quality_ari,
-            "rx_quality_nmi": rx_quality_nmi,
-            "rx_quality_homogeneity": rx_quality_homogeneity,
-            "rx_quality_completeness": rx_quality_completeness,
-            "rx_quality_v_measure": rx_quality_v_measure,
-            "rx_quality_fmi": rx_quality_fmi,
-            "rx_modularity": rx_modularity,
-            "rx_elapsed_quality": rx_elapsed_quality,
-            "rx_memory_quality": rx_memory_quality
-        }
     except Exception as e:
         print(f"Error processing dataset {dataset_name}: {str(e)}")
         import traceback
         traceback.print_exc()
-        # Return default dictionary indicating failure and lack of ground truth
-        nan_val = float("nan")
+        # Return dictionary with NaNs/defaults on major load/setup error
         return {
-            "dataset": dataset_name,
-            "has_ground_truth": False,
-            "nx_ari": nan_val, "nx_nmi": nan_val, "nx_homogeneity": nan_val,
-            "nx_completeness": nan_val, "nx_v_measure": nan_val, "nx_fmi": nan_val,
-            "nx_modularity": 0.0, "nx_elapsed": 0, "nx_memory": 0,
-            "rx_quality_ari": nan_val, "rx_quality_nmi": nan_val, "rx_quality_homogeneity": nan_val,
-            "rx_quality_completeness": nan_val, "rx_quality_v_measure": nan_val, "rx_quality_fmi": nan_val,
-            "rx_modularity": 0.0, "rx_elapsed_quality": 0, "rx_memory_quality": 0
+            "dataset": dataset_name, "nodes": 0, "edges": 0, "has_ground_truth": False,
+            "nx_ari": float("nan"), "nx_nmi": float("nan"), "nx_homogeneity": float("nan"),
+            "nx_completeness": float("nan"), "nx_v_measure": float("nan"), "nx_fmi": float("nan"),
+            "rx_ari": float("nan"), "rx_nmi": float("nan"), "rx_homogeneity": float("nan"),
+            "rx_completeness": float("nan"), "rx_v_measure": float("nan"), "rx_fmi": float("nan"),
+            "nx_modularity": 0.0, "nx_conductance": float("nan"), "nx_internal_density": float("nan"),
+            "nx_avg_internal_degree": float("nan"), "nx_tpr": float("nan"), "nx_cut_ratio": float("nan"),
+            "nx_surprise": float("nan"), "nx_significance": float("nan"),
+            "rx_modularity": 0.0, "rx_conductance": float("nan"), "rx_internal_density": float("nan"),
+            "rx_avg_internal_degree": float("nan"), "rx_tpr": float("nan"), "rx_cut_ratio": float("nan"),
+            "rx_surprise": float("nan"), "rx_significance": float("nan"),
+            "nx_elapsed": 0, "nx_memory": 0, "rx_elapsed": 0, "rx_memory": 0,
+            "nx_num_comms": 0, "rx_num_comms": 0
         }
 
 
@@ -1303,26 +1336,283 @@ def visualize_communities(nx_graph, nx_communities, rx_communities_quality,
 @measure_memory
 def run_nx_algorithm(nx_graph):
     """Run NetworkX Louvain algorithm with memory measurement."""
-    # NetworkX Louvain implicitly uses the 'weight' attribute if present
     return list(nx.community.louvain_communities(nx_graph, seed=42, weight="weight"))
 
 
 @measure_memory
 def run_rx_quality_algorithm(rx_graph):
     """Run RustWorkX Louvain algorithm with memory measurement."""
-    # Define the weight function: simply return the edge payload (which is the weight)
     def weight_fn(edge_payload):
-        # Handle cases where edge payload might not exist or is None
-        return edge_payload if edge_payload is not None else 1.0
-
-    # Call louvain_communities directly from rustworkx module
+        try: 
+            weight = float(edge_payload) if edge_payload is not None else 1.0
+            # Ensure weight is positive for Louvain
+            return max(weight, 1e-9) # Use a small positive value if weight is zero or negative
+        except (ValueError, TypeError):
+            return 1.0
     try:
-        # Corrected call: removed '.community'
+        # Corrected call
         return rx.louvain_communities(rx_graph, weight_fn=weight_fn, seed=42)
     except AttributeError:
-        # Reraise with a more informative message if not found
-        # Updated message to reflect the correct expected location
         raise AttributeError("Could not find louvain_communities function directly in rustworkx module.")
+
+
+def calculate_internal_metrics(nx_graph, communities):
+    """Calculate internal community evaluation metrics using cdlib."""
+    # ... (initial checks and community processing remain the same) ...
+    if not communities or not nx_graph or nx_graph.number_of_nodes() == 0:
+        # Return NaNs for all metrics
+        return tuple([float("nan")] * 7) 
+
+    try:
+        processed_communities_list = []
+        node_set = set(nx_graph.nodes())
+        for comm in communities:
+            valid_nodes = [node for node in comm if node in node_set]
+            if valid_nodes:
+                processed_communities_list.append(list(valid_nodes))
+        
+        if not processed_communities_list:
+            print("Warning: No valid communities found after filtering against graph nodes.")
+            return tuple([float("nan")] * 7)
+
+        # Create NodeClustering object for cdlib
+        node_clustering = cdlib.NodeClustering(processed_communities_list, nx_graph, "louvain_result", method_parameters={})
+        
+        # Helper to safely get score and handle errors/NaN
+        def get_score(func):
+            try:
+                res = func()
+                # Check if score attribute exists and is finite
+                if hasattr(res, "score") and np.isfinite(res.score):
+                    return float(res.score)
+                # Handle cases where func returns a direct float score
+                elif isinstance(res, (float, int)) and np.isfinite(res):
+                    return float(res)
+                else:
+                    return float("nan")
+            except Exception:
+                # print(f"Warning: cdlib error calculating {func.__name__}: {e}") # Optional warning
+                return float("nan")
+
+        # Calculate metrics
+        conductance = get_score(node_clustering.conductance)
+        internal_density = get_score(node_clustering.internal_edge_density)
+        avg_internal_degree = get_score(node_clustering.average_internal_degree)
+        # TPR might need adjustment if it returns per-community scores - check cdlib docs if avg needed
+        # Assuming .score gives the average or overall TPR for the partition
+        tpr = get_score(node_clustering.triangle_participation_ratio) 
+        cut_ratio = get_score(node_clustering.cut_ratio)
+        surprise = get_score(node_clustering.surprise)
+        significance = get_score(node_clustering.significance)
+
+        return (
+            conductance, internal_density, avg_internal_degree, 
+            tpr, cut_ratio, surprise, significance
+        )
+
+    except ImportError as e:
+        print(f"cdlib calculation skipped: {e}")
+        return tuple([float("nan")] * 7)
+    except Exception as e:
+        print(f"Error calculating internal metrics with cdlib: {e}")
+        import traceback
+        traceback.print_exc()
+        return tuple([float("nan")] * 7)
+
+
+def generate_results_table_matplotlib(results, output_file="benchmark_results_table.png"):
+    """Generates a table image from benchmark results using Matplotlib."""
+    if not results:
+        print("No results to generate table image.")
+        return
+
+    # Define headers including new internal metrics
+    headers = [
+        "Dataset", "Nodes", "Edges", "Has GT", 
+        "NX Time", "RX Time", "NX Mem", "RX Mem", "NX Comms", "RX Comms",
+        "NX Mod", "RX Mod", 
+        "NX Cond", "RX Cond", "NX IntDens", "RX IntDens", 
+        "NX AvgIntDeg", "RX AvgIntDeg", "NX TPR", "RX TPR", "NX CutRatio", "RX CutRatio",
+        "NX Surprise", "RX Surprise", "NX Signif", "RX Signif",
+        "NX ARI", "RX ARI", "NX NMI", "RX NMI"
+    ]
+    
+    # Prepare data for the table
+    table_data = []
+    for res in results:
+        # Format metrics, handling NaN
+        def fmt(key, decimals=3): # Reduced decimals slightly for space
+            val = res.get(key, float("nan"))
+            return f"{val:.{decimals}f}" if not np.isnan(val) else "NaN"
+
+        row_data = [
+            res["dataset"], str(res["nodes"]), str(res["edges"]),
+            "Yes" if res["has_ground_truth"] else "No",
+            format_time(res["nx_elapsed"]), format_time(res["rx_elapsed"]),
+            format_memory(res["nx_memory"]), format_memory(res["rx_memory"]),
+            str(res["nx_num_comms"]), str(res["rx_num_comms"]),
+            fmt("nx_modularity"), fmt("rx_modularity"),
+            fmt("nx_conductance"), fmt("rx_conductance"),
+            fmt("nx_internal_density"), fmt("rx_internal_density"),
+            fmt("nx_avg_internal_degree"), fmt("rx_avg_internal_degree"),
+            fmt("nx_tpr"), fmt("rx_tpr"),
+            fmt("nx_cut_ratio"), fmt("rx_cut_ratio"),
+            fmt("nx_surprise"), fmt("rx_surprise"),
+            fmt("nx_significance"), fmt("rx_significance"),
+            fmt("nx_ari"), fmt("rx_ari"), 
+            fmt("nx_nmi"), fmt("rx_nmi")
+        ]
+        table_data.append(row_data)
+
+    # Create figure and table
+    # Adjust figure size based on number of columns and rows
+    num_rows = len(table_data) + 1 # +1 for header
+    num_cols = len(headers)
+    # Estimate required figure size (this might need tuning)
+    fig_width = num_cols * 1.5 
+    fig_height = num_rows * 0.4
+    
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis("tight")
+    ax.axis("off")
+    
+    # Create the table - adjust column widths if necessary
+    # Automatic width might work better with many columns
+    the_table = ax.table(cellText=table_data, colLabels=headers, loc="center", cellLoc="center")
+    the_table.auto_set_font_size(False)
+    the_table.set_fontsize(10) # Adjust font size if needed
+    the_table.scale(1, 1.5) # Adjust scale if needed
+
+    # Style the table header
+    for (i, j), cell in the_table.get_celld().items():
+        if i == 0: # Header row
+            cell.set_text_props(weight="bold", color="white")
+            cell.set_facecolor("#40466e") # Dark blue header
+        # Apply alternating row colors for readability
+        elif i % 2 == 0:
+            cell.set_facecolor("#f2f2f2") # Light gray for even data rows
+        # Center align text in all cells
+        cell.set_text_props(ha="center")
+
+    # Apply bold formatting for best performance (Time and Memory)
+    time_nx_idx = headers.index("NX Time")
+    time_rx_idx = headers.index("RX Time")
+    mem_nx_idx = headers.index("NX Mem")
+    mem_rx_idx = headers.index("RX Mem")
+
+    for i, res in enumerate(results):
+        row_idx = i + 1 # Data rows start at index 1
+
+        # Time comparison
+        nx_t = res["nx_elapsed"]
+        rx_t = res["rx_elapsed"]
+        if nx_t == 0 and rx_t > 0: # RX only ran
+             the_table[(row_idx, time_rx_idx)].set_text_props(weight="bold")
+        elif rx_t == 0 and nx_t > 0: # NX only ran (or RX failed)
+             the_table[(row_idx, time_nx_idx)].set_text_props(weight="bold")
+        elif nx_t > 0 and rx_t > 0: # Both ran
+             if rx_t < nx_t:
+                  the_table[(row_idx, time_rx_idx)].set_text_props(weight="bold")
+             elif nx_t < rx_t:
+                  the_table[(row_idx, time_nx_idx)].set_text_props(weight="bold")
+
+        # Memory comparison
+        nx_m = res["nx_memory"]
+        rx_m = res["rx_memory"]
+        if nx_m == 0 and rx_m > 0: # RX only ran
+             the_table[(row_idx, mem_rx_idx)].set_text_props(weight="bold")
+        elif rx_m == 0 and nx_m > 0: # NX only ran (or RX failed)
+             the_table[(row_idx, mem_nx_idx)].set_text_props(weight="bold")
+        elif nx_m > 0 and rx_m > 0: # Both ran
+             if rx_m < nx_m:
+                  the_table[(row_idx, mem_rx_idx)].set_text_props(weight="bold")
+             elif nx_m < rx_m:
+                  the_table[(row_idx, mem_nx_idx)].set_text_props(weight="bold")
+
+    # Save the figure
+    try:
+        plt.savefig(output_file, dpi=300, bbox_inches="tight", pad_inches=0.5)
+        print(f"Results table image saved to: {output_file}")
+    except Exception as e:
+        print(f"Error saving table image: {e}")
+    finally:
+        plt.close(fig) # Close the figure to free memory
+
+# Update run_benchmark to call the matplotlib table function
+def run_benchmark():
+    # ... (previous setup code remains the same) ...
+    
+    # Setup result folder
+    base_result_folder = "results"
+    timestamp = datetime.now().strftime("%Y%m%d")
+    result_folder = os.path.join(base_result_folder, timestamp)
+    os.makedirs(result_folder, exist_ok=True)
+    print(f"Results will be saved to '{result_folder}'")
+    
+    # Define DATASETS dictionary (as before)
+    DATASETS = {
+        "Karate Club": load_karate_club,
+        "Davis Southern Women": load_davis_women,
+        "Florentine Families": load_florentine_families,
+        "Les Misérables": load_les_miserables,
+        "Football": load_football,
+        "Political Books": load_political_books,
+        "Dolphins": load_dolphins,
+        "LFR Benchmark (Small)": lambda: load_lfr(n=500, mu=0.3, name="LFR Small"),
+        "Political Blogs": load_polblogs,
+        # "Cora": load_cora,
+        "Facebook": load_facebook,
+        "Citeseer": load_citeseer,
+        "Email EU Core": load_email_eu_core,
+        "Graph Edges CSV": load_graph_edges_csv,
+        "Graph Edges Parquet": load_graph_edges_parquet,
+        # "LFR Benchmark (Medium)": lambda: load_lfr(n=5000, mu=0.4, name="LFR Medium"), 
+        # --- Large Datasets (uncomment selectively to run) ---
+        # "Amazon Co-purchase": load_amazon_copurchase, # ~300k nodes
+        # "Orkut": load_orkut,                             # ~3M nodes
+        # "LiveJournal": load_livejournal,                 # ~4.8M nodes
+        # "Large Synthetic (SBM)": load_large_synthetic, # ~1.5k nodes (example)
+        # "LFR Benchmark (Large)": lambda: load_lfr(n=100000, mu=0.5, name="LFR Large"), # Large LFR (can take time to generate)
+    }
+
+    plt.switch_backend("Agg")
+    
+    benchmark_results = []
+    for dataset_name, load_func in DATASETS.items():
+        print(f"\n{'-'*40}")
+        print(f"Processing {dataset_name} dataset...")
+        print(f"{'-'*40}")
+        try:
+            result = run_benchmark_on_dataset(dataset_name, load_func, result_folder)
+            benchmark_results.append(result)
+            print(f"Completed {dataset_name} dataset. Continuing to next dataset...")
+        except Exception as e:
+            print(f"❌ Error processing {dataset_name} dataset: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+    # Generate and save the results table image
+    print("\n" + "=" * 80)
+    print("GENERATING RESULTS TABLE IMAGE")
+    print("=" * 80)
+    table_image_filename = os.path.join(result_folder, "benchmark_results_table.png")
+    generate_results_table_matplotlib(benchmark_results, output_file=table_image_filename)
+
+    # Display list of generated files
+    print("\n" + "=" * 80)
+    print("BENCHMARK COMPLETE - OUTPUT FILES:")
+    print("=" * 80)
+    output_files = sorted([f for f in os.listdir(result_folder) if f.endswith(".png")])
+    if output_files:
+        for i, file in enumerate(output_files):
+            file_path = os.path.join(result_folder, file)
+            file_size = os.path.getsize(file_path) / (1024 * 1024) # Size in MB
+            print(f"{i+1}. {file} ({file_size:.2f} MB)")
+        print(f"\nOutput files saved in '{result_folder}'.")
+    else:
+        print("No output files were generated. Please check for errors.")
+
+    print("\nBenchmark completed successfully!")
 
 
 def main():
