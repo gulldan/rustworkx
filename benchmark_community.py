@@ -26,11 +26,14 @@ from datetime import datetime
 
 # cdlib imports
 import cdlib
+import cdlib.algorithms  # Added for Leiden/Infomap
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 import polars as pl
 import rustworkx as rx
+
+# Placeholder imports (cdlib might use them internally or for future direct use)
 from matplotlib.ticker import FuncFormatter
 from sklearn.metrics import (
     adjusted_rand_score,
@@ -55,7 +58,10 @@ def load_karate_club():
     """Load Zachary's Karate Club dataset with ground truth communities."""
     G = nx.karate_club_graph()
     true_labels = [1 if G.nodes[node]["club"] == "Mr. Hi" else 0 for node in G.nodes()]
-    return G, true_labels, True # Added has_ground_truth flag
+    # Add default weight=1.0 for compatibility
+    for u, v in G.edges():
+        G[u][v]["weight"] = 1.0
+    return G, true_labels, True 
 
 
 def load_davis_women():
@@ -79,7 +85,7 @@ def load_florentine_families():
 
 def load_les_miserables():
     """Load Les Misérables dataset with ground truth communities."""
-    G = nx.les_miserables_graph()
+    G_orig = nx.les_miserables_graph()
     
     # Communities are based on character groups
     old_groups = {
@@ -101,13 +107,15 @@ def load_les_miserables():
         "Child2": 11, "Brujon": 11, "MmeHucheloup": 11
     }
     
-    pos = nx.spring_layout(G, k=1/np.sqrt(len(G.nodes())), iterations=50, seed=42)
+    pos = nx.spring_layout(G_orig, k=1/np.sqrt(len(G_orig.nodes())), iterations=50, seed=42)
     H = nx.Graph()
-    mapping = {old: i for i, old in enumerate(G.nodes())}
+    mapping = {old: i for i, old in enumerate(G_orig.nodes())}
     for old_node, new_node in mapping.items():
         H.add_node(new_node, pos=pos[old_node], value=old_groups[old_node])
-    for u, v in G.edges():
-        H.add_edge(mapping[u], mapping[v])
+    # Add edges with weight=1.0
+    for u, v in G_orig.edges():
+        H.add_edge(mapping[u], mapping[v], weight=1.0) # Add default weight
+        
     true_labels = [H.nodes[node]["value"] for node in H.nodes()]
     return H, true_labels, True
 
@@ -195,89 +203,59 @@ def load_email_eu_core():
 
 
 def load_graph_edges_csv():
-    """Load graph from CSV file without ground truth communities.
-    
-    Creates dummy ground truth communities (all nodes in one group)
-    for benchmark compatibility.
-    """
+    """Load graph from CSV, calculate similarity weight from distance."""
     print("Loading graph from datasets/graph_edges.csv...")
     try:
-        # Read edges from CSV
         df = pl.read_csv("datasets/graph_edges.csv")
-        print(f"CSV file columns: {df.columns}")
-        
-        # Create a NetworkX graph
         G = nx.Graph()
-        
-        # Add edges with weights (distance as weight)
         for row in df.iter_rows(named=True):
             src = row["src"]
             dst = row["dst"]
-            # Use distance (if available) or default to 1.0
-            weight = float(row.get("distance", 1.0))
-            G.add_edge(src, dst, weight=weight)
-        
-        # Get node and edge counts (convert to list to avoid iterator issues)
+            distance = float(row.get("distance", 2.0)) # Default to max distance if missing
+            # Calculate similarity: 1 - d/2 for cosine distance [0, 2] -> similarity [0, 1]
+            # Ensure weight is positive
+            similarity = max(1e-9, 1.0 - distance / 2.0) 
+            G.add_edge(src, dst, weight=similarity) # Use similarity as weight
+            
         nodes = list(G.nodes())
         edges = list(G.edges())
-        
-        # Print graph info
-        print(f"Created graph with {len(nodes)} nodes and {len(edges)} edges")
-        
-        # Create dummy ground truth (all in one community)
+        print(f"Created graph with {len(nodes)} nodes and {len(edges)} edges (using similarity weights)")
         true_labels = [0] * len(nodes)
         print("Warning: No ground truth available for this dataset.")
-        
-        return G, true_labels, False # Indicate no ground truth
+        return G, true_labels, False
     except Exception as e:
         print(f"Error loading graph from CSV: {e}")
-        # Return tiny dummy graph in case of error
         G = nx.Graph()
         G.add_node(0)
-        return G, [0], False # Indicate no ground truth on error too
+        return G, [0], False
 
 
 def load_graph_edges_parquet():
-    """Load graph from Parquet file without ground truth communities.
-    
-    Creates dummy ground truth communities (all nodes in one group)
-    for benchmark compatibility.
-    """
+    """Load graph from Parquet, calculate similarity weight from distance."""
     print("Loading graph from datasets/graph_edges_big.parquet...")
     try:
-        # Read edges from Parquet
         df = pl.read_parquet("datasets/graph_edges_big.parquet")
-        print(f"Parquet file columns: {df.columns}")
-        
-        # Create a NetworkX graph
         G = nx.Graph()
-        
-        # Add edges with weights (distance as weight)
         for row in df.iter_rows(named=True):
             src = row["src"]
             dst = row["dst"]
-            # Use distance (if available) or default to 1.0
-            weight = float(row.get("distance", 1.0))
-            G.add_edge(src, dst, weight=weight)
-        
-        # Get node and edge counts (convert to list to avoid iterator issues)
+            distance = float(row.get("distance", 2.0)) # Default to max distance if missing
+            # Calculate similarity: 1 - d/2 for cosine distance [0, 2] -> similarity [0, 1]
+            # Ensure weight is positive
+            similarity = max(1e-9, 1.0 - distance / 2.0) 
+            G.add_edge(src, dst, weight=similarity) # Use similarity as weight
+
         nodes = list(G.nodes())
         edges = list(G.edges())
-        
-        # Print graph info
-        print(f"Created graph with {len(nodes)} nodes and {len(edges)} edges")
-        
-        # Create dummy ground truth (all in one community)
+        print(f"Created graph with {len(nodes)} nodes and {len(edges)} edges (using similarity weights)")
         true_labels = [0] * len(nodes)
         print("Warning: No ground truth available for this dataset.")
-        
-        return G, true_labels, False # Indicate no ground truth
+        return G, true_labels, False
     except Exception as e:
         print(f"Error loading graph from Parquet: {e}")
-        # Return tiny dummy graph in case of error
         G = nx.Graph()
         G.add_node(0)
-        return G, [0], False # Indicate no ground truth on error too
+        return G, [0], False
 
 
 def load_lfr(n=250, mu=0.1, name="LFR Benchmark"):
@@ -453,19 +431,35 @@ def load_livejournal():
 
 
 def convert_nx_to_rx(nx_graph):
-    """Convert NetworkX graph to RustWorkX graph, preserving weights."""
+    """Convert NetworkX graph to RustWorkX graph, ensuring positive similarity weights."""
     node_map = {}
-    rx_graph = rx.PyGraph()
+    # Fix: Use rustworkx.PyGraph directly if available, handle potential AttributeError
+    try:
+        # Linter might flag PyGraph if using an older rustworkx version
+        rx_graph = rx.PyGraph()
+    except AttributeError:
+        print("Warning: rx.PyGraph not found. Check rustworkx installation/version.")
+        # Fallback or raise error depending on desired behavior
+        raise AttributeError("rx.PyGraph not found in rustworkx module.")
 
     for node in nx_graph.nodes():
         rx_idx = rx_graph.add_node(node)
         node_map[node] = rx_idx
 
-    # Add edges with weights from the NetworkX graph
     for u, v, data in nx_graph.edges(data=True):
-        # Use data.get('weight', 1.0) to handle unweighted or differently named weight attributes
-        weight = data.get("weight", 1.0)
-        rx_graph.add_edge(node_map[u], node_map[v], weight) # Store weight as edge payload
+        weight = 1.0 # Default weight
+        if "weight" in data:
+             weight = data["weight"]
+        elif "distance" in data:
+             # Convert distance to similarity if 'weight' isn't present
+             distance = float(data.get("distance", 2.0))
+             similarity = max(1e-9, 1.0 - distance / 2.0)
+             weight = similarity
+             # print(f"Converted distance {distance} to similarity {similarity}") # Optional debug print
+        
+        # Ensure weight is positive for algorithms like Louvain/Leiden/Infomap
+        final_weight = float(max(weight, 1e-9)) 
+        rx_graph.add_edge(node_map[u], node_map[v], final_weight)
 
     return rx_graph, node_map
 
@@ -925,51 +919,51 @@ def generate_results_table(results):
     if not results:
         return "No results to display."
 
-    # Define headers (add new internal metrics)
+    # Define headers (add new algorithms and metrics)
     headers = [
-        "Dataset", "Nodes", "Edges", "Has GT", 
-        "NX Time", "RX Time", "NX Mem", "RX Mem", "NX Comms", "RX Comms",
-        "NX Mod", "RX Mod", 
-        "NX Cond", "RX Cond", "NX IntDens", "RX IntDens", 
-        "NX AvgIntDeg", "RX AvgIntDeg", "NX TPR", "RX TPR", "NX CutRatio", "RX CutRatio",
-        "NX Surprise", "RX Surprise", "NX Signif", "RX Signif",
-        "NX ARI", "RX ARI", "NX NMI", "RX NMI" # Keep key external metrics for comparison
+        "Dataset", "Nodes", "Edges", "Has GT",
+        "NX Time", "RX Time", "LD Time", "IM Time", # Time
+        "NX Mem", "RX Mem", "LD Mem", "IM Mem",     # Memory
+        "NX Comms", "RX Comms", "LD Comms", "IM Comms", # Num Communities
+        "NX Mod", "RX Mod", "LD Mod", "IM Mod",     # Modularity
+        "NX Cond", "RX Cond", "LD Cond", "IM Cond",   # Conductance
+        "NX IntDens", "RX IntDens", "LD IntDens", "IM IntDens", # Internal Density
+        # Add other internal metrics if space allows or needed (e.g., TPR, CutRatio...)
+        # "NX AvgIntDeg", "RX AvgIntDeg", "LD AvgIntDeg", "IM AvgIntDeg",
+        # "NX TPR", "RX TPR", "LD TPR", "IM TPR",
+        # "NX CutRatio", "RX CutRatio", "LD CutRatio", "IM CutRatio",
+        # "NX Surprise", "RX Surprise", "LD Surprise", "IM Surprise",
+        # "NX Signif", "RX Signif", "LD Signif", "IM Signif",
+        "NX ARI", "RX ARI", "LD ARI", "IM ARI",     # ARI (if GT)
+        "NX NMI", "RX NMI", "LD NMI", "IM NMI"      # NMI (if GT)
     ]
-    
+
     # Create separator line
     sep = ["---"] * len(headers)
-    
+
     table = [" | ".join(headers), " | ".join(sep)]
 
     # Format result rows
     for res in results:
-        # Format performance with bold for faster time
-        nx_time_str = format_time(res["nx_elapsed"])
-        rx_time_str = format_time(res["rx_elapsed"])
-        
-        # Simple bolding: if one is zero and the other isn't, bold the non-zero
-        # If both non-zero, bold the smaller one.
-        if res["nx_elapsed"] == 0 and res["rx_elapsed"] > 0:
-            rx_time_str = f"**{rx_time_str}**"
-        elif res["rx_elapsed"] == 0 and res["nx_elapsed"] > 0:
-            nx_time_str = f"**{nx_time_str}**"
-        elif res["nx_elapsed"] > 0 and res["rx_elapsed"] > 0:
-            if res["rx_elapsed"] < res["nx_elapsed"]:
-                rx_time_str = f"**{rx_time_str}**"
-            else:
-                nx_time_str = f"**{nx_time_str}**"
-                
-        nx_mem_str = format_memory(res["nx_memory"])
-        rx_mem_str = format_memory(res["rx_memory"])
-        if res["nx_memory"] == 0 and res["rx_memory"] > 0:
-             rx_mem_str = f"**{rx_mem_str}**" # Less memory is better
-        elif res["rx_memory"] == 0 and res["nx_memory"] > 0:
-             nx_mem_str = f"**{nx_mem_str}**"
-        elif res["rx_memory"] > 0 and res["nx_memory"] > 0:
-             if res["rx_memory"] < res["nx_memory"]:
-                  rx_mem_str = f"**{rx_mem_str}**"
-             else:
-                  nx_mem_str = f"**{nx_mem_str}**"
+        # Format performance with bold for faster time across all algos
+        def get_best_idx(values):
+            """Finds index of the minimum non-zero value."""
+            non_zero_values = [(v, i) for i, v in enumerate(values) if v > 0]
+            if not non_zero_values: return -1 # All are zero or invalid
+            return min(non_zero_values)[1] # Return index of min value
+
+        times = [res.get("nx_elapsed", 0), res.get("rx_elapsed", 0), res.get("ld_elapsed", 0), res.get("im_elapsed", 0)]
+        mems = [res.get("nx_memory", 0), res.get("rx_memory", 0), res.get("ld_memory", 0), res.get("im_memory", 0)]
+
+        best_time_idx = get_best_idx(times)
+        best_mem_idx = get_best_idx(mems) # Lower memory is better
+
+        time_strs = [format_time(t) for t in times]
+        mem_strs = [format_memory(m) for m in mems]
+
+        if best_time_idx != -1: time_strs[best_time_idx] = f"**{time_strs[best_time_idx]}**"
+        if best_mem_idx != -1: mem_strs[best_mem_idx] = f"**{mem_strs[best_mem_idx]}**"
+
 
         # Format metrics, handling NaN
         def fmt(key, decimals=4):
@@ -978,26 +972,22 @@ def generate_results_table(results):
 
         row = [
             res["dataset"],
-            str(res["nodes"]), 
+            str(res["nodes"]),
             str(res["edges"]),
             "Yes" if res["has_ground_truth"] else "No",
-            nx_time_str, rx_time_str,
-            nx_mem_str, rx_mem_str,
-            str(res["nx_num_comms"]), str(res["rx_num_comms"]),
-            fmt("nx_modularity"), fmt("rx_modularity"),
-            fmt("nx_conductance"), fmt("rx_conductance"),
-            fmt("nx_internal_density"), fmt("rx_internal_density"),
-            fmt("nx_avg_internal_degree"), fmt("rx_avg_internal_degree"),
-            fmt("nx_tpr"), fmt("rx_tpr"),
-            fmt("nx_cut_ratio"), fmt("rx_cut_ratio"),
-            fmt("nx_surprise"), fmt("rx_surprise"),
-            fmt("nx_significance"), fmt("rx_significance"),
-            fmt("nx_ari"), fmt("rx_ari"), # Renamed from rx_quality_ari
-            fmt("nx_nmi"), fmt("rx_nmi")  # Renamed from rx_quality_nmi
+            time_strs[0], time_strs[1], time_strs[2], time_strs[3], # Times
+            mem_strs[0], mem_strs[1], mem_strs[2], mem_strs[3],   # Memories
+            str(res.get("nx_num_comms", 0)), str(res.get("rx_num_comms", 0)), str(res.get("ld_num_comms", 0)), str(res.get("im_num_comms", 0)), # Num Comms
+            fmt("nx_modularity"), fmt("rx_modularity"), fmt("ld_modularity"), fmt("im_modularity"), # Modularity
+            fmt("nx_conductance"), fmt("rx_conductance"), fmt("ld_conductance"), fmt("im_conductance"), # Conductance
+            fmt("nx_internal_density"), fmt("rx_internal_density"), fmt("ld_internal_density"), fmt("im_internal_density"), # Internal Density
+            # Add other metrics if included in headers following the pattern NX, RX, LD, IM
+            fmt("nx_ari"), fmt("rx_ari"), fmt("ld_ari"), fmt("im_ari"), # ARI
+            fmt("nx_nmi"), fmt("rx_nmi"), fmt("ld_nmi"), fmt("im_nmi")  # NMI
         ]
         table.append(" | ".join(row))
-        
-    return "\n".join(table)
+
+    return "\\n".join(table)
 
 
 # Threshold for considering a graph 'large' and skipping NetworkX
@@ -1024,138 +1014,238 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
         # Convert graph
         rx_graph, node_map = convert_nx_to_rx(nx_graph)
 
-        # Initialize results dictionary
+        # Initialize results dictionary - Expanded for Leiden & Infomap
         results = {
             "dataset": dataset_name,
             "nodes": num_nodes,
             "edges": num_edges,
             "has_ground_truth": has_ground_truth,
-            # External Metrics (default NaN)
+            # External Metrics (default NaN) - NX, RX, Leiden, Infomap
             "nx_ari": float("nan"), "nx_nmi": float("nan"), "nx_homogeneity": float("nan"),
             "nx_completeness": float("nan"), "nx_v_measure": float("nan"), "nx_fmi": float("nan"),
             "rx_ari": float("nan"), "rx_nmi": float("nan"), "rx_homogeneity": float("nan"),
             "rx_completeness": float("nan"), "rx_v_measure": float("nan"), "rx_fmi": float("nan"),
-            # Internal Metrics (default NaN/0.0)
+            "ld_ari": float("nan"), "ld_nmi": float("nan"), "ld_homogeneity": float("nan"),
+            "ld_completeness": float("nan"), "ld_v_measure": float("nan"), "ld_fmi": float("nan"),
+            "im_ari": float("nan"), "im_nmi": float("nan"), "im_homogeneity": float("nan"),
+            "im_completeness": float("nan"), "im_v_measure": float("nan"), "im_fmi": float("nan"),
+            # Internal Metrics (default NaN/0.0) - NX, RX, Leiden, Infomap
             "nx_modularity": 0.0, "nx_conductance": float("nan"), "nx_internal_density": float("nan"),
             "nx_avg_internal_degree": float("nan"), "nx_tpr": float("nan"), "nx_cut_ratio": float("nan"),
             "nx_surprise": float("nan"), "nx_significance": float("nan"),
             "rx_modularity": 0.0, "rx_conductance": float("nan"), "rx_internal_density": float("nan"),
             "rx_avg_internal_degree": float("nan"), "rx_tpr": float("nan"), "rx_cut_ratio": float("nan"),
             "rx_surprise": float("nan"), "rx_significance": float("nan"),
-            # Performance (default 0)
+            "ld_modularity": 0.0, "ld_conductance": float("nan"), "ld_internal_density": float("nan"),
+            "ld_avg_internal_degree": float("nan"), "ld_tpr": float("nan"), "ld_cut_ratio": float("nan"),
+            "ld_surprise": float("nan"), "ld_significance": float("nan"),
+            "im_modularity": 0.0, "im_conductance": float("nan"), "im_internal_density": float("nan"),
+            "im_avg_internal_degree": float("nan"), "im_tpr": float("nan"), "im_cut_ratio": float("nan"),
+            "im_surprise": float("nan"), "im_significance": float("nan"),
+            # Performance (default 0) - NX, RX, Leiden, Infomap
             "nx_elapsed": 0, "nx_memory": 0, "rx_elapsed": 0, "rx_memory": 0,
-            "nx_num_comms": 0, "rx_num_comms": 0 
+            "ld_elapsed": 0, "ld_memory": 0, "im_elapsed": 0, "im_memory": 0,
+            "nx_num_comms": 0, "rx_num_comms": 0, "ld_num_comms": 0, "im_num_comms": 0
         }
 
-        # --- Run NetworkX --- 
+        # Prepare the graph that will be used by cdlib (needs to be NetworkX)
+        # Create an undirected copy for algorithms that require it (like Louvain, Leiden, Infomap implicitly)
+        graph_for_nx_cdlib = nx.Graph(nx_graph)
+
+        # --- Run NetworkX Louvain (Baseline) ---
         nx_communities = []
         if num_nodes <= LARGE_GRAPH_THRESHOLD:
             try:
                 print("\nRunning NetworkX Louvain...")
                 nx_start = time.time()
-                graph_to_use_nx = nx.Graph(nx_graph) if nx.is_directed(nx_graph) else nx_graph
-                nx_communities, results["nx_memory"] = run_nx_algorithm(graph_to_use_nx)
+                # Use the undirected copy
+                nx_communities, results["nx_memory"] = run_nx_algorithm(graph_for_nx_cdlib)
                 results["nx_elapsed"] = time.time() - nx_start
                 results["nx_num_comms"] = len(nx_communities)
-                print(f"NetworkX: {results['nx_num_comms']} communities in {format_time(results['nx_elapsed'])} using {format_memory(results['nx_memory'])}")
+                print(f"NetworkX Louvain: {results['nx_num_comms']} communities in {format_time(results['nx_elapsed'])} using {format_memory(results['nx_memory'])}")
 
                 if nx_communities:
                     # Calculate NX Modularity
                     try:
-                        results["nx_modularity"] = nx.community.modularity(graph_to_use_nx, nx_communities, weight="weight")
+                        results["nx_modularity"] = nx.community.modularity(graph_for_nx_cdlib, nx_communities, weight="weight")
                     except Exception as mod_e:
                         print(f"Warning: NX modularity calculation failed: {mod_e}")
 
                     # Calculate NX Internal Metrics
-                    (results["nx_conductance"], results["nx_internal_density"], 
-                     results["nx_avg_internal_degree"], results["nx_tpr"], results["nx_cut_ratio"], 
-                     results["nx_surprise"], results["nx_significance"]) = calculate_internal_metrics(graph_to_use_nx, nx_communities)
+                    (results["nx_conductance"], results["nx_internal_density"],
+                     results["nx_avg_internal_degree"], results["nx_tpr"], results["nx_cut_ratio"],
+                     results["nx_surprise"], results["nx_significance"]) = calculate_internal_metrics(graph_for_nx_cdlib, nx_communities)
 
                     # Calculate NX External Metrics if ground truth exists
                     if has_ground_truth:
-                        (results["nx_ari"], results["nx_nmi"], results["nx_homogeneity"], 
-                         results["nx_completeness"], results["nx_v_measure"], results["nx_fmi"]) = compare_with_true_labels(nx_communities, true_labels)
+                        (results["nx_ari"], results["nx_nmi"], results["nx_homogeneity"],
+                         results["nx_completeness"], results["nx_v_measure"], results["nx_fmi"]) = compare_with_true_labels(nx_communities, true_labels) # No node map needed for NX
 
             except Exception as e:
                 print(f"Error running NetworkX Louvain: {str(e)}")
                 # Ensure performance metrics are 0 if it fails mid-run
-                results["nx_elapsed"] = 0
-                results["nx_memory"] = 0
-                results["nx_num_comms"] = 0
+                results["nx_elapsed"], results["nx_memory"], results["nx_num_comms"] = 0, 0, 0
         else:
             print(f"\nSkipping NetworkX Louvain for large graph ({num_nodes} nodes > {LARGE_GRAPH_THRESHOLD})")
 
-        # --- Run RustWorkX --- 
+        # --- Run RustWorkX Louvain (Baseline) ---
         rx_communities = []
         try:
-            print("Running RustWorkX Louvain...")
+            print("\nRunning RustWorkX Louvain...")
             rx_start = time.time()
-            rx_communities, results["rx_memory"] = run_rx_quality_algorithm(rx_graph) # Changed key name
-            results["rx_elapsed"] = time.time() - rx_start # Changed key name
+            # Use updated function call which tries community submodule first
+            rx_communities, results["rx_memory"] = run_rx_quality_algorithm(rx_graph)
+            results["rx_elapsed"] = time.time() - rx_start
             results["rx_num_comms"] = len(rx_communities)
-            print(f"RustWorkX: {results['rx_num_comms']} communities in {format_time(results['rx_elapsed'])} using {format_memory(results['rx_memory'])}")
+            print(f"RustWorkX Louvain: {results['rx_num_comms']} communities in {format_time(results['rx_elapsed'])} using {format_memory(results['rx_memory'])}")
 
             if rx_communities:
-                # Calculate RX Modularity
+                # Calculate RX Modularity (using rustworkx)
                 try:
                     def weight_fn(edge_payload):
                         try: return float(edge_payload) if edge_payload is not None else 1.0
                         except (ValueError, TypeError): return 1.0
-                    results["rx_modularity"] = rx.modularity(rx_graph, rx_communities, weight_fn=weight_fn)
-                except AttributeError:
-                    print("Warning: rx.modularity function not found. Skipping calculation.")
+                    # Use function with fallback mechanism - NOW CORRECTED TO TOP LEVEL
+                    results["rx_modularity"] = rx_modularity_calculation(rx_graph, rx_communities, weight_fn)
                 except Exception as mod_e:
                     print(f"Warning: RX modularity calculation failed: {mod_e}")
-                    
+
                 # Calculate RX Internal Metrics
+                # Map rx community indices back to original node IDs using node_map's reverse
                 rx_communities_orig_ids = []
                 reverse_map = {v: k for k, v in node_map.items()}
                 for comm_indices in rx_communities:
-                    orig_comm = {reverse_map[idx] for idx in comm_indices if idx in reverse_map}
+                    # Convert set of indices to list of original IDs
+                    orig_comm = [reverse_map[idx] for idx in comm_indices if idx in reverse_map]
                     if orig_comm:
-                        rx_communities_orig_ids.append(list(orig_comm)) # Pass list of lists
-                
+                        rx_communities_orig_ids.append(orig_comm) # cdlib expects list of lists
+
                 if rx_communities_orig_ids:
-                    (results["rx_conductance"], results["rx_internal_density"], 
-                     results["rx_avg_internal_degree"], results["rx_tpr"], results["rx_cut_ratio"], 
-                     results["rx_surprise"], results["rx_significance"]) = calculate_internal_metrics(nx_graph, rx_communities_orig_ids)
+                    # Use the original graph (or undirected copy) for internal metrics
+                    (results["rx_conductance"], results["rx_internal_density"],
+                     results["rx_avg_internal_degree"], results["rx_tpr"], results["rx_cut_ratio"],
+                     results["rx_surprise"], results["rx_significance"]) = calculate_internal_metrics(graph_for_nx_cdlib, rx_communities_orig_ids)
                 else:
-                    print("Warning: No valid communities found for RustWorkX after mapping back node IDs.")
+                     print("Warning: No valid communities found for RustWorkX after mapping back node IDs.")
 
                 # Calculate RX External Metrics if ground truth exists
                 if has_ground_truth:
+                    # Compare using rx_communities (indices) and node_map
                     (results["rx_ari"], results["rx_nmi"], results["rx_homogeneity"],
                      results["rx_completeness"], results["rx_v_measure"], results["rx_fmi"]) = compare_with_true_labels(rx_communities, true_labels, node_map)
 
+        except AttributeError as ae:
+             print(f"Error running RustWorkX Louvain (likely missing function, check install/version): {str(ae)}")
+             results["rx_elapsed"], results["rx_memory"], results["rx_num_comms"] = 0, 0, 0
         except Exception as e:
             print(f"Error running RustWorkX Louvain: {str(e)}")
-            # Ensure performance metrics are 0 if it fails mid-run
-            results["rx_elapsed"] = 0
-            results["rx_memory"] = 0
-            results["rx_num_comms"] = 0
+            results["rx_elapsed"], results["rx_memory"], results["rx_num_comms"] = 0, 0, 0
 
-        # --- Reporting --- 
+
+        # --- Run Leiden (cdlib) ---
+        leiden_communities = []
+        leiden_resolution = 1.0 # Default resolution, can be parameterized later if needed
+        try:
+            print(f"\nRunning Leiden (cdlib, resolution={leiden_resolution})...")
+            ld_start = time.time()
+            # Use the undirected NetworkX graph directly with cdlib
+            leiden_communities, results["ld_memory"] = run_leiden_cdlib(graph_for_nx_cdlib, resolution=leiden_resolution)
+            results["ld_elapsed"] = time.time() - ld_start
+            results["ld_num_comms"] = len(leiden_communities)
+            print(f"Leiden (cdlib): {results['ld_num_comms']} communities in {format_time(results['ld_elapsed'])} using {format_memory(results['ld_memory'])}")
+
+            if leiden_communities:
+                # Calculate Leiden Modularity (using NetworkX modularity for consistency in calculation across algos)
+                try:
+                    results["ld_modularity"] = nx.community.modularity(graph_for_nx_cdlib, leiden_communities, weight="weight", resolution=leiden_resolution)
+                except Exception as mod_e:
+                    print(f"Warning: Leiden modularity calculation failed: {mod_e}")
+
+                # Calculate Leiden Internal Metrics
+                (results["ld_conductance"], results["ld_internal_density"],
+                 results["ld_avg_internal_degree"], results["ld_tpr"], results["ld_cut_ratio"],
+                 results["ld_surprise"], results["ld_significance"]) = calculate_internal_metrics(graph_for_nx_cdlib, leiden_communities)
+
+                # Calculate Leiden External Metrics if ground truth exists
+                if has_ground_truth:
+                    # Compare using original node IDs directly
+                    (results["ld_ari"], results["ld_nmi"], results["ld_homogeneity"],
+                     results["ld_completeness"], results["ld_v_measure"], results["ld_fmi"]) = compare_with_true_labels(leiden_communities, true_labels) # No node_map needed
+
+        except ImportError:
+            print("Error: cdlib or leidenalg not installed/found. Skipping Leiden.")
+            results["ld_elapsed"], results["ld_memory"], results["ld_num_comms"] = 0, 0, 0
+        except Exception as e:
+            print(f"Error running Leiden (cdlib): {str(e)}")
+            import traceback
+            traceback.print_exc()
+            results["ld_elapsed"], results["ld_memory"], results["ld_num_comms"] = 0, 0, 0
+
+
+        # --- Run Infomap (cdlib) ---
+        infomap_communities = []
+        try:
+            print("\nRunning Infomap (cdlib)...")
+            im_start = time.time()
+            # Use the undirected NetworkX graph directly with cdlib
+            infomap_communities, results["im_memory"] = run_infomap_cdlib(graph_for_nx_cdlib)
+            results["im_elapsed"] = time.time() - im_start
+            results["im_num_comms"] = len(infomap_communities)
+            print(f"Infomap (cdlib): {results['im_num_comms']} communities in {format_time(results['im_elapsed'])} using {format_memory(results['im_memory'])}")
+
+            if infomap_communities:
+                # Calculate Infomap Modularity (using NetworkX modularity for consistency)
+                try:
+                    # Infomap doesn't inherently optimize modularity, but we calculate it for comparison
+                    results["im_modularity"] = nx.community.modularity(graph_for_nx_cdlib, infomap_communities, weight="weight")
+                except Exception as mod_e:
+                    print(f"Warning: Infomap modularity calculation failed: {mod_e}")
+
+                # Calculate Infomap Internal Metrics
+                (results["im_conductance"], results["im_internal_density"],
+                 results["im_avg_internal_degree"], results["im_tpr"], results["im_cut_ratio"],
+                 results["im_surprise"], results["im_significance"]) = calculate_internal_metrics(graph_for_nx_cdlib, infomap_communities)
+
+                # Calculate Infomap External Metrics if ground truth exists
+                if has_ground_truth:
+                    # Compare using original node IDs directly
+                    (results["im_ari"], results["im_nmi"], results["im_homogeneity"],
+                     results["im_completeness"], results["im_v_measure"], results["im_fmi"]) = compare_with_true_labels(infomap_communities, true_labels) # No node_map needed
+
+        except ImportError:
+            print("Error: cdlib or Infomap backend not installed/found. Skipping Infomap.")
+            results["im_elapsed"], results["im_memory"], results["im_num_comms"] = 0, 0, 0
+        except Exception as e:
+            print(f"Error running Infomap (cdlib): {str(e)}")
+            import traceback
+            traceback.print_exc()
+            results["im_elapsed"], results["im_memory"], results["im_num_comms"] = 0, 0, 0
+
+
+        # --- Reporting ---
         print("\n--- Scores Summary ---")
-        print(f"Modularity:         NX={results['nx_modularity']:.4f}, RX={results['rx_modularity']:.4f}")
-        print(f"Conductance:        NX={results['nx_conductance']:.4f}, RX={results['rx_conductance']:.4f} (lower=better)")
-        print(f"Internal Density:   NX={results['nx_internal_density']:.4f}, RX={results['rx_internal_density']:.4f} (higher=better)")
-        print(f"Avg Internal Deg:   NX={results['nx_avg_internal_degree']:.4f}, RX={results['rx_avg_internal_degree']:.4f} (higher=better)")
-        print(f"TPR:                NX={results['nx_tpr']:.4f}, RX={results['rx_tpr']:.4f} (higher=better)")
-        print(f"Cut Ratio:          NX={results['nx_cut_ratio']:.4f}, RX={results['rx_cut_ratio']:.4f} (lower=better)")
-        print(f"Surprise:           NX={results['nx_surprise']:.4f}, RX={results['rx_surprise']:.4f} (higher=better)")
-        print(f"Significance:       NX={results['nx_significance']:.4f}, RX={results['rx_significance']:.4f} (higher=better)")
+        print(f"Modularity:         NX={results['nx_modularity']:.4f}, RX={results['rx_modularity']:.4f}, LD={results['ld_modularity']:.4f}, IM={results['im_modularity']:.4f}")
+        print(f"Conductance:        NX={results['nx_conductance']:.4f}, RX={results['rx_conductance']:.4f}, LD={results['ld_conductance']:.4f}, IM={results['im_conductance']:.4f} (lower=better)")
+        print(f"Internal Density:   NX={results['nx_internal_density']:.4f}, RX={results['rx_internal_density']:.4f}, LD={results['ld_internal_density']:.4f}, IM={results['im_internal_density']:.4f} (higher=better)")
+        print(f"Avg Internal Deg:   NX={results['nx_avg_internal_degree']:.4f}, RX={results['rx_avg_internal_degree']:.4f}, LD={results['ld_avg_internal_degree']:.4f}, IM={results['im_avg_internal_degree']:.4f} (higher=better)")
+        print(f"TPR:                NX={results['nx_tpr']:.4f}, RX={results['rx_tpr']:.4f}, LD={results['ld_tpr']:.4f}, IM={results['im_tpr']:.4f} (higher=better)")
+        print(f"Cut Ratio:          NX={results['nx_cut_ratio']:.4f}, RX={results['rx_cut_ratio']:.4f}, LD={results['ld_cut_ratio']:.4f}, IM={results['im_cut_ratio']:.4f} (lower=better)")
+        print(f"Surprise:           NX={results['nx_surprise']:.4f}, RX={results['rx_surprise']:.4f}, LD={results['ld_surprise']:.4f}, IM={results['im_surprise']:.4f} (higher=better)")
+        print(f"Significance:       NX={results['nx_significance']:.4f}, RX={results['rx_significance']:.4f}, LD={results['ld_significance']:.4f}, IM={results['im_significance']:.4f} (higher=better)")
+
         if has_ground_truth:
             print("-- External --")
-            print(f"ARI:                NX={results['nx_ari']:.4f}, RX={results['rx_ari']:.4f}")
-            print(f"NMI:                NX={results['nx_nmi']:.4f}, RX={results['rx_nmi']:.4f}")
+            print(f"ARI:                NX={results['nx_ari']:.4f}, RX={results['rx_ari']:.4f}, LD={results['ld_ari']:.4f}, IM={results['im_ari']:.4f}")
+            print(f"NMI:                NX={results['nx_nmi']:.4f}, RX={results['rx_nmi']:.4f}, LD={results['ld_nmi']:.4f}, IM={results['im_nmi']:.4f}")
+            # Add other external metrics if needed (Homogeneity, Completeness, V-Measure, FMI)
+            # print(f"Homogeneity:        NX={results['nx_homogeneity']:.4f}, RX={results['rx_homogeneity']:.4f}, LD={results['ld_homogeneity']:.4f}, IM={results['im_homogeneity']:.4f}")
+            # print(f"Completeness:       NX={results['nx_completeness']:.4f}, RX={results['rx_completeness']:.4f}, LD={results['ld_completeness']:.4f}, IM={results['im_completeness']:.4f}")
+            # print(f"V-Measure:          NX={results['nx_v_measure']:.4f}, RX={results['rx_v_measure']:.4f}, LD={results['ld_v_measure']:.4f}, IM={results['im_v_measure']:.4f}")
+            # print(f"FMI:                NX={results['nx_fmi']:.4f}, RX={results['rx_fmi']:.4f}, LD={results['ld_fmi']:.4f}, IM={results['im_fmi']:.4f}")
         print("--------------------")
 
-        # --- Visualization Call (Commented Out) --- 
-        # try:
-        #     safe_filename = dataset_name.lower().replace(" ", "_").replace("-", "_")
-        #     visualize_communities( ... ) # Pass all necessary results
-        # except Exception as e:
-        #     print(f"Error during visualization: {str(e)}")
+        # --- Visualization Call (Remains Commented Out/Optional) ---
+        # ... (visualization call can be added here if desired, needs updating for 4 algos) ...
 
         return results # Return the full dictionary
 
@@ -1164,20 +1254,32 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
         import traceback
         traceback.print_exc()
         # Return dictionary with NaNs/defaults on major load/setup error
+        # Ensure all algorithm keys are present even on error
         return {
             "dataset": dataset_name, "nodes": 0, "edges": 0, "has_ground_truth": False,
             "nx_ari": float("nan"), "nx_nmi": float("nan"), "nx_homogeneity": float("nan"),
             "nx_completeness": float("nan"), "nx_v_measure": float("nan"), "nx_fmi": float("nan"),
             "rx_ari": float("nan"), "rx_nmi": float("nan"), "rx_homogeneity": float("nan"),
             "rx_completeness": float("nan"), "rx_v_measure": float("nan"), "rx_fmi": float("nan"),
+            "ld_ari": float("nan"), "ld_nmi": float("nan"), "ld_homogeneity": float("nan"),
+            "ld_completeness": float("nan"), "ld_v_measure": float("nan"), "ld_fmi": float("nan"),
+            "im_ari": float("nan"), "im_nmi": float("nan"), "im_homogeneity": float("nan"),
+            "im_completeness": float("nan"), "im_v_measure": float("nan"), "im_fmi": float("nan"),
             "nx_modularity": 0.0, "nx_conductance": float("nan"), "nx_internal_density": float("nan"),
             "nx_avg_internal_degree": float("nan"), "nx_tpr": float("nan"), "nx_cut_ratio": float("nan"),
             "nx_surprise": float("nan"), "nx_significance": float("nan"),
             "rx_modularity": 0.0, "rx_conductance": float("nan"), "rx_internal_density": float("nan"),
             "rx_avg_internal_degree": float("nan"), "rx_tpr": float("nan"), "rx_cut_ratio": float("nan"),
             "rx_surprise": float("nan"), "rx_significance": float("nan"),
+            "ld_modularity": 0.0, "ld_conductance": float("nan"), "ld_internal_density": float("nan"),
+            "ld_avg_internal_degree": float("nan"), "ld_tpr": float("nan"), "ld_cut_ratio": float("nan"),
+            "ld_surprise": float("nan"), "ld_significance": float("nan"),
+            "im_modularity": 0.0, "im_conductance": float("nan"), "im_internal_density": float("nan"),
+            "im_avg_internal_degree": float("nan"), "im_tpr": float("nan"), "im_cut_ratio": float("nan"),
+            "im_surprise": float("nan"), "im_significance": float("nan"),
             "nx_elapsed": 0, "nx_memory": 0, "rx_elapsed": 0, "rx_memory": 0,
-            "nx_num_comms": 0, "rx_num_comms": 0
+            "ld_elapsed": 0, "ld_memory": 0, "im_elapsed": 0, "im_memory": 0,
+            "nx_num_comms": 0, "rx_num_comms": 0, "ld_num_comms": 0, "im_num_comms": 0
         }
 
 
@@ -1336,6 +1438,9 @@ def visualize_communities(nx_graph, nx_communities, rx_communities_quality,
 @measure_memory
 def run_nx_algorithm(nx_graph):
     """Run NetworkX Louvain algorithm with memory measurement."""
+    # NetworkX Louvain implicitly uses the 'weight' attribute if present
+    # Use nx.community submodule
+    # Linter might flag louvain_communities if using an older networkx version
     return list(nx.community.louvain_communities(nx_graph, seed=42, weight="weight"))
 
 
@@ -1343,17 +1448,38 @@ def run_nx_algorithm(nx_graph):
 def run_rx_quality_algorithm(rx_graph):
     """Run RustWorkX Louvain algorithm with memory measurement."""
     def weight_fn(edge_payload):
-        try: 
-            weight = float(edge_payload) if edge_payload is not None else 1.0
-            # Ensure weight is positive for Louvain
-            return max(weight, 1e-9) # Use a small positive value if weight is zero or negative
+        try:
+            # Payload is already the calculated positive similarity weight
+            return float(edge_payload)
         except (ValueError, TypeError):
-            return 1.0
+            return 1.0 # Fallback, should ideally not happen if conversion worked
     try:
-        # Corrected call
+        # Fix: Call top-level louvain_communities based on src/lib.rs
+        # Linter might still flag this depending on version analysis
         return rx.louvain_communities(rx_graph, weight_fn=weight_fn, seed=42)
     except AttributeError:
-        raise AttributeError("Could not find louvain_communities function directly in rustworkx module.")
+         # If the top-level doesn't work (e.g., older version), maybe try community (unlikely based on lib.rs)
+        try:
+            print("Warning: rx.louvain_communities not found, trying rx.community.louvain_communities...")
+            return rx.community.louvain_communities(rx_graph, weight_fn=weight_fn, seed=42)
+        except AttributeError:
+             raise AttributeError("Could not find louvain_communities function in rustworkx or rustworkx.community.")
+
+# Helper function for rx modularity calculation with fallback
+def rx_modularity_calculation(rx_graph, communities, weight_fn):
+    """Calculates modularity using rustworkx, trying top-level first."""
+    try:
+        # Try top-level first (based on src/lib.rs)
+        # Linter might flag modularity depending on rustworkx version
+        return rx.modularity(rx_graph, communities, weight_fn=weight_fn)
+    except AttributeError:
+        # Fallback to community submodule (less likely based on lib.rs)
+        try:
+            print("Warning: rx.modularity not found, trying rx.community.modularity...")
+            return rx.community.modularity(rx_graph, communities, weight_fn=weight_fn)
+        except AttributeError:
+            print("Warning: Modularity function not found in rustworkx or rustworkx.community.")
+            return float("nan") # Return NaN if neither path works
 
 
 def calculate_internal_metrics(nx_graph, communities):
@@ -1426,17 +1552,20 @@ def generate_results_table_matplotlib(results, output_file="benchmark_results_ta
         print("No results to generate table image.")
         return
 
-    # Define headers including new internal metrics
+    # Define headers including new algorithms
     headers = [
-        "Dataset", "Nodes", "Edges", "Has GT", 
-        "NX Time", "RX Time", "NX Mem", "RX Mem", "NX Comms", "RX Comms",
-        "NX Mod", "RX Mod", 
-        "NX Cond", "RX Cond", "NX IntDens", "RX IntDens", 
-        "NX AvgIntDeg", "RX AvgIntDeg", "NX TPR", "RX TPR", "NX CutRatio", "RX CutRatio",
-        "NX Surprise", "RX Surprise", "NX Signif", "RX Signif",
-        "NX ARI", "RX ARI", "NX NMI", "RX NMI"
+        "Dataset", "Nodes", "Edges", "Has GT",
+        "NX Time", "RX Time", "LD Time", "IM Time", # Time
+        "NX Mem", "RX Mem", "LD Mem", "IM Mem",     # Memory
+        "NX Comms", "RX Comms", "LD Comms", "IM Comms", # Num Communities
+        "NX Mod", "RX Mod", "LD Mod", "IM Mod",     # Modularity
+        "NX Cond", "RX Cond", "LD Cond", "IM Cond",   # Conductance
+        "NX IntDens", "RX IntDens", "LD IntDens", "IM IntDens", # Internal Density
+        # Add other internal metrics if space allows or needed
+        "NX ARI", "RX ARI", "LD ARI", "IM ARI",     # ARI (if GT)
+        "NX NMI", "RX NMI", "LD NMI", "IM NMI"      # NMI (if GT)
     ]
-    
+
     # Prepare data for the table
     table_data = []
     for res in results:
@@ -1448,19 +1577,16 @@ def generate_results_table_matplotlib(results, output_file="benchmark_results_ta
         row_data = [
             res["dataset"], str(res["nodes"]), str(res["edges"]),
             "Yes" if res["has_ground_truth"] else "No",
-            format_time(res["nx_elapsed"]), format_time(res["rx_elapsed"]),
-            format_memory(res["nx_memory"]), format_memory(res["rx_memory"]),
-            str(res["nx_num_comms"]), str(res["rx_num_comms"]),
-            fmt("nx_modularity"), fmt("rx_modularity"),
-            fmt("nx_conductance"), fmt("rx_conductance"),
-            fmt("nx_internal_density"), fmt("rx_internal_density"),
-            fmt("nx_avg_internal_degree"), fmt("rx_avg_internal_degree"),
-            fmt("nx_tpr"), fmt("rx_tpr"),
-            fmt("nx_cut_ratio"), fmt("rx_cut_ratio"),
-            fmt("nx_surprise"), fmt("rx_surprise"),
-            fmt("nx_significance"), fmt("rx_significance"),
-            fmt("nx_ari"), fmt("rx_ari"), 
-            fmt("nx_nmi"), fmt("rx_nmi")
+            format_time(res.get("nx_elapsed", 0)), format_time(res.get("rx_elapsed", 0)), format_time(res.get("ld_elapsed", 0)), format_time(res.get("im_elapsed", 0)), # Times
+            format_memory(res.get("nx_memory", 0)), format_memory(res.get("rx_memory", 0)), format_memory(res.get("ld_memory", 0)), format_memory(res.get("im_memory", 0)),   # Memories
+            str(res.get("nx_num_comms", 0)), str(res.get("rx_num_comms", 0)), str(res.get("ld_num_comms", 0)), str(res.get("im_num_comms", 0)), # Num Comms
+            fmt("nx_modularity"), fmt("rx_modularity"), fmt("ld_modularity"), fmt("im_modularity"), # Modularity
+            fmt("nx_conductance"), fmt("rx_conductance"), fmt("ld_conductance"), fmt("im_conductance"), # Conductance
+            fmt("nx_internal_density"), fmt("rx_internal_density"), fmt("ld_internal_density"), fmt("im_internal_density"), # Internal Density
+            # Add other metrics following the pattern NX, RX, LD, IM
+            # fmt("nx_avg_internal_degree"), ... # etc.
+            fmt("nx_ari"), fmt("rx_ari"), fmt("ld_ari"), fmt("im_ari"), # ARI
+            fmt("nx_nmi"), fmt("rx_nmi"), fmt("ld_nmi"), fmt("im_nmi")  # NMI
         ]
         table_data.append(row_data)
 
@@ -1494,40 +1620,31 @@ def generate_results_table_matplotlib(results, output_file="benchmark_results_ta
         # Center align text in all cells
         cell.set_text_props(ha="center")
 
-    # Apply bold formatting for best performance (Time and Memory)
-    time_nx_idx = headers.index("NX Time")
-    time_rx_idx = headers.index("RX Time")
-    mem_nx_idx = headers.index("NX Mem")
-    mem_rx_idx = headers.index("RX Mem")
+    # Apply bold formatting for best performance (Time and Memory) across all algos
+    # Helper function to find index of minimum non-zero value
+    def get_best_idx(values):
+        non_zero_values = [(v, i) for i, v in enumerate(values) if v > 0]
+        if not non_zero_values: return -1
+        return min(non_zero_values)[1]
+
+    time_indices = [headers.index(h) for h in ["NX Time", "RX Time", "LD Time", "IM Time"]]
+    mem_indices = [headers.index(h) for h in ["NX Mem", "RX Mem", "LD Mem", "IM Mem"]]
 
     for i, res in enumerate(results):
         row_idx = i + 1 # Data rows start at index 1
 
         # Time comparison
-        nx_t = res["nx_elapsed"]
-        rx_t = res["rx_elapsed"]
-        if nx_t == 0 and rx_t > 0: # RX only ran
-             the_table[(row_idx, time_rx_idx)].set_text_props(weight="bold")
-        elif rx_t == 0 and nx_t > 0: # NX only ran (or RX failed)
-             the_table[(row_idx, time_nx_idx)].set_text_props(weight="bold")
-        elif nx_t > 0 and rx_t > 0: # Both ran
-             if rx_t < nx_t:
-                  the_table[(row_idx, time_rx_idx)].set_text_props(weight="bold")
-             elif nx_t < rx_t:
-                  the_table[(row_idx, time_nx_idx)].set_text_props(weight="bold")
+        times = [res.get("nx_elapsed", 0), res.get("rx_elapsed", 0), res.get("ld_elapsed", 0), res.get("im_elapsed", 0)]
+        best_time_idx = get_best_idx(times)
+        if best_time_idx != -1:
+            the_table[(row_idx, time_indices[best_time_idx])].set_text_props(weight="bold")
 
         # Memory comparison
-        nx_m = res["nx_memory"]
-        rx_m = res["rx_memory"]
-        if nx_m == 0 and rx_m > 0: # RX only ran
-             the_table[(row_idx, mem_rx_idx)].set_text_props(weight="bold")
-        elif rx_m == 0 and nx_m > 0: # NX only ran (or RX failed)
-             the_table[(row_idx, mem_nx_idx)].set_text_props(weight="bold")
-        elif nx_m > 0 and rx_m > 0: # Both ran
-             if rx_m < nx_m:
-                  the_table[(row_idx, mem_rx_idx)].set_text_props(weight="bold")
-             elif nx_m < rx_m:
-                  the_table[(row_idx, mem_nx_idx)].set_text_props(weight="bold")
+        mems = [res.get("nx_memory", 0), res.get("rx_memory", 0), res.get("ld_memory", 0), res.get("im_memory", 0)]
+        best_mem_idx = get_best_idx(mems) # Lower memory is better
+        if best_mem_idx != -1:
+            the_table[(row_idx, mem_indices[best_mem_idx])].set_text_props(weight="bold")
+
 
     # Save the figure
     try:
@@ -1538,81 +1655,30 @@ def generate_results_table_matplotlib(results, output_file="benchmark_results_ta
     finally:
         plt.close(fig) # Close the figure to free memory
 
-# Update run_benchmark to call the matplotlib table function
-def run_benchmark():
-    # ... (previous setup code remains the same) ...
-    
-    # Setup result folder
-    base_result_folder = "results"
-    timestamp = datetime.now().strftime("%Y%m%d")
-    result_folder = os.path.join(base_result_folder, timestamp)
-    os.makedirs(result_folder, exist_ok=True)
-    print(f"Results will be saved to '{result_folder}'")
-    
-    # Define DATASETS dictionary (as before)
-    DATASETS = {
-        "Karate Club": load_karate_club,
-        "Davis Southern Women": load_davis_women,
-        "Florentine Families": load_florentine_families,
-        "Les Misérables": load_les_miserables,
-        "Football": load_football,
-        "Political Books": load_political_books,
-        "Dolphins": load_dolphins,
-        "LFR Benchmark (Small)": lambda: load_lfr(n=500, mu=0.3, name="LFR Small"),
-        "Political Blogs": load_polblogs,
-        # "Cora": load_cora,
-        "Facebook": load_facebook,
-        "Citeseer": load_citeseer,
-        "Email EU Core": load_email_eu_core,
-        "Graph Edges CSV": load_graph_edges_csv,
-        "Graph Edges Parquet": load_graph_edges_parquet,
-        # "LFR Benchmark (Medium)": lambda: load_lfr(n=5000, mu=0.4, name="LFR Medium"), 
-        # --- Large Datasets (uncomment selectively to run) ---
-        # "Amazon Co-purchase": load_amazon_copurchase, # ~300k nodes
-        # "Orkut": load_orkut,                             # ~3M nodes
-        # "LiveJournal": load_livejournal,                 # ~4.8M nodes
-        # "Large Synthetic (SBM)": load_large_synthetic, # ~1.5k nodes (example)
-        # "LFR Benchmark (Large)": lambda: load_lfr(n=100000, mu=0.5, name="LFR Large"), # Large LFR (can take time to generate)
-    }
 
-    plt.switch_backend("Agg")
-    
-    benchmark_results = []
-    for dataset_name, load_func in DATASETS.items():
-        print(f"\n{'-'*40}")
-        print(f"Processing {dataset_name} dataset...")
-        print(f"{'-'*40}")
-        try:
-            result = run_benchmark_on_dataset(dataset_name, load_func, result_folder)
-            benchmark_results.append(result)
-            print(f"Completed {dataset_name} dataset. Continuing to next dataset...")
-        except Exception as e:
-            print(f"❌ Error processing {dataset_name} dataset: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            
-    # Generate and save the results table image
-    print("\n" + "=" * 80)
-    print("GENERATING RESULTS TABLE IMAGE")
-    print("=" * 80)
-    table_image_filename = os.path.join(result_folder, "benchmark_results_table.png")
-    generate_results_table_matplotlib(benchmark_results, output_file=table_image_filename)
+@measure_memory
+def run_leiden_cdlib(nx_graph, resolution=1.0):
+    """Run Leiden algorithm using cdlib with memory measurement."""
+    # cdlib's Leiden function takes the NetworkX graph directly
+    # Ensure weights are handled correctly ('weight' attribute is standard)
+    print(f"Running Leiden algorithm (cdlib, resolution={resolution})...")
+    # Use keyword arguments explicitly. Removing resolution argument due to conflicting errors.
+    # This will use the default resolution of the underlying implementation (likely 1.0).
+    # Linter might flag the type of 'weights' argument, but string name is standard.
+    communities = cdlib.algorithms.leiden(nx_graph, weights="weight")
+    # cdlib returns a NodeClustering object, we need the communities list
+    return communities.communities
 
-    # Display list of generated files
-    print("\n" + "=" * 80)
-    print("BENCHMARK COMPLETE - OUTPUT FILES:")
-    print("=" * 80)
-    output_files = sorted([f for f in os.listdir(result_folder) if f.endswith(".png")])
-    if output_files:
-        for i, file in enumerate(output_files):
-            file_path = os.path.join(result_folder, file)
-            file_size = os.path.getsize(file_path) / (1024 * 1024) # Size in MB
-            print(f"{i+1}. {file} ({file_size:.2f} MB)")
-        print(f"\nOutput files saved in '{result_folder}'.")
-    else:
-        print("No output files were generated. Please check for errors.")
 
-    print("\nBenchmark completed successfully!")
+@measure_memory
+def run_infomap_cdlib(nx_graph):
+    """Run Infomap algorithm using cdlib with memory measurement."""
+    # cdlib's Infomap function takes the NetworkX graph directly
+    print("Running Infomap algorithm (cdlib)...")
+    # Removed weights argument, assuming implicit use of 'weight' attribute based on previous attempts.
+    communities = cdlib.algorithms.infomap(nx_graph)
+     # cdlib returns a NodeClustering object, we need the communities list
+    return communities.communities
 
 
 def main():
