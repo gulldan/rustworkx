@@ -9,31 +9,35 @@
 # This file contains only type annotations for PyO3 functions and classes
 # For implementation details, see __init__.py and src/lib.rs
 
-from .visit import BFSVisitor, DFSVisitor, DijkstraVisitor
-from types import GenericAlias
-from typing import (
-    Callable,
-    final,
-    Any,
-    Generic,
-    overload,
-)
+import sys
+from abc import ABC
 from collections.abc import (
+    Hashable,
+    ItemsView,
     Iterable,
     Iterator,
-    Sequence,
-    ItemsView,
     KeysView,
-    ValuesView,
     Mapping,
-    Hashable,
+    Sequence,
+    ValuesView,
 )
-from abc import ABC
-from rustworkx import generators  # noqa
+from types import GenericAlias
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    List,
+    Set,
+    final,
+    overload,
+)
 
 import numpy as np
 import numpy.typing as npt
-import sys
+
+from rustworkx import generators  # noqa
+
+from .visit import BFSVisitor, DFSVisitor, DijkstraVisitor
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar
@@ -202,13 +206,6 @@ def graph_two_color(graph: PyGraph) -> dict[int, int]: ...
 def digraph_two_color(graph: PyDiGraph) -> dict[int, int]: ...
 def graph_misra_gries_edge_color(graph: PyGraph, /) -> dict[int, int]: ...
 def graph_bipartite_edge_color(graph: PyGraph, /) -> dict[int, int]: ...
-
-# Community detection
-
-def label_propagation_communities(
-    graph: PyGraph[_S, _T],
-    /,
-) -> list[list[int]]: ...
 
 # Connectivity
 
@@ -1198,6 +1195,33 @@ class MultiplePathMapping(_RustworkxCustomHashMapIter[int, list[list[int]]]): ..
 @final
 class AllPairsMultiplePathMapping(_RustworkxCustomHashMapIter[int, MultiplePathMapping]): ...
 
+# Community detection
+
+def louvain_communities(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    /,
+    weight_fn: Callable[[_T], float] | None = ...,
+    resolution: float = ...,
+    threshold: float = ...,
+    seed: int | None = ...,
+    weight: str | None = ...,
+) -> List[Set[int]]: ...
+
+def label_propagation_communities(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    /,
+    resolution: float | None = ...,
+    seed: int | None = ...,
+) -> List[Set[int]]: ...
+
+def modularity(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    communities: List[Set[int]] | Iterable[Set[int]],
+    /,
+    weight_fn: Callable[[_T], float] | None = ...,
+    resolution: float = ...,
+) -> float: ...
+
 # Graph
 
 class PyGraph(Generic[_S, _T]):
@@ -1431,6 +1455,7 @@ class PyDiGraph(Generic[_S, _T]):
     def find_successors_by_edge(
         self, node: int, filter_fn: Callable[[_T], bool], /
     ) -> list[_S]: ...
+    def find_successor_node_by_edge(self, node: int, predicate: Callable[[_T], bool], /) -> _S: ...
     @staticmethod
     def from_adjacency_matrix(
         matrix: npt.NDArray[np.float64], /, null_value: float = ...

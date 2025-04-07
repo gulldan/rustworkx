@@ -8,7 +8,6 @@ Algorithm Functions
 
    centrality
    coloring
-   community
    connectivity_and_cycles
    dag_algorithms
    dominance

@@ -2,6 +2,8 @@ include README.md
 include LICENSE
 include Cargo.toml
 include Cargo.lock
+include pyproject.toml
 recursive-include src *
 recursive-include rustworkx-core *
 recursive-include rustworkx *.pyi py.typed
+recursive-include retworkx *

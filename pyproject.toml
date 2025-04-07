@@ -1,10 +1,65 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
+
+[project]
+name = "rustworkx"
+description = "A python graph library implemented in Rust"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Matthew Treinish", email = "mtreinish@kortar.org"},
+]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+keywords = ["Networks", "network", "graph", "Graph Theory", "DAG"]
+dependencies = [
+    "cdlib>=0.4.0",
+    "leidenalg>=0.10.2",
+    "matplotlib>=3.9.4",
+    "networkx>=3.2.1",
+    "numpy>=1.16.0,<3",
+    "polars>=1.26.0",
+    "pytest>=8.3.5",
+    "reno>=4.1.0",
+    "scikit-learn>=1.6.1",
+]
+dynamic = ["version"]
+
+[project.urls]
+"Bug Tracker" = "https://github.com/Qiskit/rustworkx/issues"
+"Source Code" = "https://github.com/Qiskit/rustworkx"
+"Documentation" = "https://www.rustworkx.org/"
+
+[project.optional-dependencies]
+mpl = ["matplotlib>=3.0"]
+graphviz = ["pillow>=5.4"]
+all = ["matplotlib>=3.0", "pillow>=5.4"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "."
+module-name = "rustworkx.rustworkx"
+binding = "pyo3"
+py-limited-api = "cp39"
 
 [tool.black]
 line-length = 100
-target-version = ['py39', 'py310', 'py311', 'py312']
+target-version = ['py39', 'py310', 'py311', 'py312', 'py313']
 
 [tool.ruff]
 line-length = 105 # more lenient than black due to long function signatures
@@ -34,7 +89,7 @@ manylinux-i686-image = "manylinux2014"
 skip = "pp* cp36-* cp37-* cp38-* *win32 *musllinux*i686"
 test-requires = "networkx"
 test-command = "python -m unittest discover {project}/tests"
-before-build = "pip install -U setuptools-rust"
+before-build = "pip install -U maturin"
 test-skip = "*linux_s390x *ppc64le *musllinux*aarch64"
 
 [tool.cibuildwheel.linux]

@@ -47,7 +47,6 @@ use bisimulation::*;
 use cartesian_product::*;
 use centrality::*;
 use coloring::*;
-use community::*;
 use connectivity::*;
 use dag_algo::*;
 use dominance::*;
@@ -427,7 +426,30 @@ pub fn label_propagation_communities(
     resolution: Option<f64>,
     seed: Option<u64>,
 ) -> PyResult<Vec<Vec<usize>>> {
-    louvain_communities(py, graph, None, resolution.unwrap_or(1.0), 0.0000001, seed, None)
+    crate::community::louvain::louvain_communities(
+        py,
+        graph,
+        None,
+        resolution.unwrap_or(1.0),
+        0.0000001,
+        seed,
+        None,
+    )
+}
+
+/// Calculate the modularity of a graph given a partition.
+/// See community::louvain::modularity for details.
+#[pyfunction]
+#[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
+#[pyo3(signature = (graph, partition, weight_fn=None, resolution=1.0))]
+pub fn modularity(
+    py: Python,
+    graph: PyObject,
+    partition: Vec<Vec<usize>>,
+    weight_fn: Option<PyObject>,
+    resolution: Option<f64>,
+) -> PyResult<f64> {
+    crate::community::louvain::modularity(py, graph, partition, weight_fn, resolution)
 }
 
 #[pymodule]
@@ -613,9 +635,16 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
-    m.add_function(wrap_pyfunction!(louvain_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::label_propagation_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(modularity, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::louvain::louvain_communities,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::louvain::label_propagation_communities,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
+    m.add_wrapped(wrap_pyfunction!(modularity))?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;
@@ -678,6 +707,5 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<iterators::BiconnectedComponents>()?;
     m.add_class::<ColoringStrategy>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
-    
     Ok(())
 }

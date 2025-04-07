@@ -13,12 +13,13 @@ license.workspace = true
 [workspace]
 members = [
     "rustworkx-core",
+    "rustworkx-core/fuzz"
 ]
 
 [workspace.package]
 version = "0.17.0"
 edition = "2021"
-rust-version = "1.85.1"
+rust-version = "1.79"
 authors = ["Matthew Treinish <mtreinish@kortar.org>"]
 repository = "https://github.com/Qiskit/rustworkx"
 license = "Apache-2.0"
@@ -29,7 +30,7 @@ fixedbitset = "0.5.7"
 indexmap = { version = ">=1.9, <3", features = ["rayon"] }
 ndarray = { version = "0.16.1", features = ["rayon"] }
 num-traits = "0.2"
-petgraph = "0.7.0"
+petgraph = "0.7"
 hashbrown = { version = ">=0.13, <0.16", features = ["rayon"] }
 numpy = "0.24"
 rand = "0.8"
@@ -45,6 +46,7 @@ ahash.workspace = true
 fixedbitset.workspace = true
 hashbrown.workspace = true
 indexmap.workspace = true
+itertools = "0.14.0"
 ndarray.workspace = true
 ndarray-stats = "0.6.0"
 num-bigint = "0.4"
