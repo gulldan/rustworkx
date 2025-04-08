@@ -320,7 +320,7 @@ def main():
     save_polbooks_network()
     save_dolphins_network()
     save_polblogs_network()
-    save_cora_network()
+    # save_cora_network()
     save_facebook_network()
     save_citeseer_network()  # Добавляем вызов для Citeseer
     save_email_eu_core_network() # Добавляем вызов для Email-Eu-core
