@@ -58,7 +58,7 @@ def main():
             print(f"  - Node {node_idx}: {node_data}")
     
     # Print summary stats about the graph
-    print(f"\nGraph summary:")
+    print("\nGraph summary:")
     print(f"  - Total nodes: {len(graph)}")
     print(f"  - Total edges: {len(graph.edges())}")
     print(f"  - Number of communities: {len(communities)}")
@@ -80,5 +80,5 @@ def main():
     print(f"\nTotal inter-community edges: {inter_community_edges}")
     print(f"Total intra-community edges: {len(graph.edges()) - inter_community_edges}")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

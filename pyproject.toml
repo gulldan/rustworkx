@@ -7,7 +7,7 @@ name = "rustworkx"
 description = "A python graph library implemented in Rust"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 authors = [
     {name = "Matthew Treinish", email = "mtreinish@kortar.org"},
 ]
@@ -17,8 +17,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -27,19 +25,22 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
 ]
 keywords = ["Networks", "network", "graph", "Graph Theory", "DAG"]
-dependencies = [
-    "cdlib>=0.4.0",
-    "leidenalg>=0.10.2",
-    "matplotlib>=3.9.4",
-    "networkx>=3.2.1",
-    "numpy>=1.16.0,<3",
-    "polars>=1.26.0",
-    "pytest>=8.3.5",
-    "reno>=4.1.0",
-    "scikit-learn>=1.6.1",
-]
+
 dynamic = ["version"]
 
+[dependency-group]
+dev = [
+  "ruff>=0.11.0",
+  "cdlib>=0.4.0",
+  "leidenalg>=0.10.2",
+  "matplotlib>=3.9.4",
+  "networkx>=3.2.1",
+  "numpy>=1.16.0,<3",
+  "polars>=1.26.0",
+  "pytest>=8.3.5",
+  "reno>=4.1.0",
+  "scikit-learn>=1.6.1",
+]
 [project.urls]
 "Bug Tracker" = "https://github.com/Qiskit/rustworkx/issues"
 "Source Code" = "https://github.com/Qiskit/rustworkx"
@@ -55,11 +56,11 @@ features = ["pyo3/extension-module"]
 python-source = "."
 module-name = "rustworkx.rustworkx"
 binding = "pyo3"
-py-limited-api = "cp39"
+py-limited-api = "cp311"
 
 [tool.black]
 line-length = 100
-target-version = ['py39', 'py310', 'py311', 'py312', 'py313']
+target-version = ['py311', 'py312', 'py313']
 
 [tool.ruff]
 line-length = 105 # more lenient than black due to long function signatures
@@ -71,7 +72,7 @@ lint.select = [
     "PYI", # flake8-pyi
     "Q",   # flake8-quotes
 ]
-target-version = "py39"
+target-version = "py311"
 extend-exclude = ["doc"]
 
 [tool.ruff.lint.per-file-ignores]
@@ -111,3 +112,6 @@ repair-wheel-command = "brew install pipx && pipx ensurepath && pipx run --spec 
 
 [tool.cibuildwheel.windows]
 repair-wheel-command = "cp {wheel} {dest_dir}/. && pipx run abi3audit==0.0.9 --strict --report {wheel}"
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"

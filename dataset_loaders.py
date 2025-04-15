@@ -1,7 +1,6 @@
 import os
 import shutil
 import time
-import gzip
 
 import networkx as nx
 import numpy as np

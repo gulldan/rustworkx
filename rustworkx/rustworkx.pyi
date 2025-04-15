@@ -9,35 +9,31 @@
 # This file contains only type annotations for PyO3 functions and classes
 # For implementation details, see __init__.py and src/lib.rs
 
-import sys
-from abc import ABC
-from collections.abc import (
-    Hashable,
-    ItemsView,
-    Iterable,
-    Iterator,
-    KeysView,
-    Mapping,
-    Sequence,
-    ValuesView,
-)
+from .visit import BFSVisitor, DFSVisitor, DijkstraVisitor
 from types import GenericAlias
 from typing import (
-    Any,
-    Callable,
-    Generic,
-    List,
-    Set,
     final,
+    Any,
+    Generic,
     overload,
 )
+from collections.abc import Callable
+from collections.abc import (
+    Iterable,
+    Iterator,
+    Sequence,
+    ItemsView,
+    KeysView,
+    ValuesView,
+    Mapping,
+    Hashable,
+)
+from abc import ABC
+from rustworkx import generators  # noqa
 
 import numpy as np
 import numpy.typing as npt
-
-from rustworkx import generators  # noqa
-
-from .visit import BFSVisitor, DFSVisitor, DijkstraVisitor
+import sys
 
 if sys.version_info >= (3, 13):
     from typing import TypeVar
@@ -47,7 +43,7 @@ else:
 if sys.version_info >= (3, 11):
     from typing import Self
 else:
-    from typing_extensions import Self
+    from typing import Self
 
 _S = TypeVar("_S", default=Any)
 _T = TypeVar("_T", default=Any)
@@ -132,22 +128,26 @@ def graph_edge_betweenness_centrality(
 def digraph_closeness_centrality(
     graph: PyDiGraph[_S, _T],
     wf_improved: bool = ...,
+    parallel_threshold: int = ...,
 ) -> CentralityMapping: ...
 def graph_closeness_centrality(
     graph: PyGraph[_S, _T],
     wf_improved: bool = ...,
+    parallel_threshold: int = ...,
 ) -> CentralityMapping: ...
 def digraph_newman_weighted_closeness_centrality(
     graph: PyDiGraph[_S, _T],
     weight_fn: Callable[[_T], float] | None = ...,
     wf_improved: bool = ...,
     default_weight: float = ...,
+    parallel_threshold: int = ...,
 ) -> CentralityMapping: ...
 def graph_newman_weighted_closeness_centrality(
     graph: PyGraph[_S, _T],
     weight_fn: Callable[[_T], float] | None = ...,
     wf_improved: bool = ...,
     default_weight: float = ...,
+    parallel_threshold: int = ...,
 ) -> CentralityMapping: ...
 def digraph_degree_centrality(
     graph: PyDiGraph[_S, _T],
@@ -1194,33 +1194,6 @@ class MultiplePathMapping(_RustworkxCustomHashMapIter[int, list[list[int]]]): ..
 
 @final
 class AllPairsMultiplePathMapping(_RustworkxCustomHashMapIter[int, MultiplePathMapping]): ...
-
-# Community detection
-
-def louvain_communities(
-    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
-    /,
-    weight_fn: Callable[[_T], float] | None = ...,
-    resolution: float = ...,
-    threshold: float = ...,
-    seed: int | None = ...,
-    weight: str | None = ...,
-) -> List[Set[int]]: ...
-
-def label_propagation_communities(
-    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
-    /,
-    resolution: float | None = ...,
-    seed: int | None = ...,
-) -> List[Set[int]]: ...
-
-def modularity(
-    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
-    communities: List[Set[int]] | Iterable[Set[int]],
-    /,
-    weight_fn: Callable[[_T], float] | None = ...,
-    resolution: float = ...,
-) -> float: ...
 
 # Graph
 

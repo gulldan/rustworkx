@@ -76,13 +76,8 @@ try:
 except Exception as e:
     print(f"Error checking rustworkx attributes: {e}")
 
-# ... existing code ...
-# The dataset loading functions (load_karate_club, ..., load_livejournal) are removed.
-# ... existing code ...
-# The utility functions (convert_nx_to_rx, compare_with_true_labels, measure_memory, format_memory, format_time, rx_modularity_calculation, calculate_internal_metrics) are removed.
-# ... existing code ...
-# The plotting functions (create_comparison_chart, generate_results_table, generate_results_table_matplotlib) are removed.
-# ... existing code ...
+# Импорт spatial биндингов
+from rustworkx import spatial
 
 
 def run_benchmark():
@@ -230,7 +225,7 @@ def run_nx_algorithm(graph):
 def run_rx_algorithm(graph):
     """Run RustWorkX Louvain algorithm, ensuring it returns a list of lists (node indices)."""
     weight_fn = lambda edge: float(edge)
-    communities = rx.community.louvain_communities(graph, weight_fn=weight_fn, seed=42)
+    communities = rx.louvain_communities(graph, weight_fn=weight_fn, seed=42)
     return communities
 
 @measure_memory
@@ -257,13 +252,23 @@ def run_cdlib_algorithm(graph, algorithm_name):
         print(f"Warning: Unexpected output type from cdlib {algorithm_name}: {type(coms)}")
         return [] # Return empty list if format is unexpected
 
+@measure_memory
+def run_rx_leiden_algorithm(graph):
+    """Run RustWorkX Leiden algorithm, ensuring it returns a list of lists (node indices)."""
+    try:
+        communities = rx.leiden_communities(graph, _weight_fn=None, resolution=1.0, seed=42)
+        return communities
+    except Exception as e:
+        print(f"Warning: Leiden algorithm failed: {e}")
+        return []
+
 def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
     """Run benchmark comparison on a specific dataset."""
     # ... (setup code: print header, set seed) ...
     print(f"\n{'='*50}")
     print(f"Running Louvain benchmark on {dataset_name} dataset")
     print(f"{'='*50}")
-    fixed_seed = 42
+    fixed_seed = 42 
     random.seed(fixed_seed)
     np.random.seed(fixed_seed)
 
@@ -277,21 +282,29 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
         "nodes": num_nodes, # Will be updated after loading
         "edges": num_edges,   # Will be updated after loading
         "has_ground_truth": has_ground_truth, # Will be updated after loading
-        # External Metrics (default NaN) - NX, RX(Louvain)
+        # External Metrics (default NaN) - NX, RX(Louvain), RX(Leiden)
         "nx_ari": float("nan"), "nx_nmi": float("nan"), "nx_homogeneity": float("nan"),
         "nx_completeness": float("nan"), "nx_v_measure": float("nan"), "nx_fmi": float("nan"),
         "rx_louvain_ari": float("nan"), "rx_louvain_nmi": float("nan"), "rx_louvain_homogeneity": float("nan"),
         "rx_louvain_completeness": float("nan"), "rx_louvain_v_measure": float("nan"), "rx_louvain_fmi": float("nan"),
-        # Internal Metrics (default NaN/0.0) - NX, RX(Louvain)
+        # Добавляем метрики для Leiden
+        "rx_leiden_ari": float("nan"), "rx_leiden_nmi": float("nan"), "rx_leiden_homogeneity": float("nan"),
+        "rx_leiden_completeness": float("nan"), "rx_leiden_v_measure": float("nan"), "rx_leiden_fmi": float("nan"),
+        # Internal Metrics (default NaN/0.0) - NX, RX(Louvain), RX(Leiden)
         "nx_modularity": 0.0, "nx_conductance": float("nan"), "nx_internal_density": float("nan"),
         "nx_avg_internal_degree": float("nan"), "nx_tpr": float("nan"), "nx_cut_ratio": float("nan"),
         "nx_surprise": float("nan"), "nx_significance": float("nan"),
         "rx_louvain_modularity": 0.0, "rx_louvain_conductance": float("nan"), "rx_louvain_internal_density": float("nan"),
         "rx_louvain_avg_internal_degree": float("nan"), "rx_louvain_tpr": float("nan"), "rx_louvain_cut_ratio": float("nan"),
         "rx_louvain_surprise": float("nan"), "rx_louvain_significance": float("nan"),
-        # Performance (default 0) - NX, RX(Louvain)
+        # Добавляем метрики для Leiden
+        "rx_leiden_modularity": 0.0, "rx_leiden_conductance": float("nan"), "rx_leiden_internal_density": float("nan"),
+        "rx_leiden_avg_internal_degree": float("nan"), "rx_leiden_tpr": float("nan"), "rx_leiden_cut_ratio": float("nan"),
+        "rx_leiden_surprise": float("nan"), "rx_leiden_significance": float("nan"),
+        # Performance (default 0) - NX, RX(Louvain), RX(Leiden)
         "nx_elapsed": 0, "nx_memory": 0, "nx_num_comms": 0,
         "rx_louvain_elapsed": 0, "rx_louvain_memory": 0, "rx_louvain_num_comms": 0,
+        "rx_leiden_elapsed": 0, "rx_leiden_memory": 0, "rx_leiden_num_comms": 0,
     }
 
     try:
@@ -375,7 +388,6 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
             rx_communities_raw, results["rx_louvain_memory"] = run_rx_algorithm(rx_graph)
             rx_communities_rx_indices = rx_communities_raw # Keep RX indices for modularity
             # Ensure communities are list of sets for consistency (using original node IDs)
-            # Correct indentation for reverse_map and rx_communities calculation
             reverse_map = {v: k for k, v in node_map.items()}
             rx_communities = [set(reverse_map[node_idx] for node_idx in c) for c in rx_communities_raw]
 
@@ -417,17 +429,138 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
             # Ensure performance metrics are 0 if it fails mid-run
             results["rx_louvain_elapsed"], results["rx_louvain_memory"], results["rx_louvain_num_comms"] = 0, 0, 0
 
-        # --- Commented out RustWorkX Leiden section ---
-        # ... (ensure this section remains correctly commented or removed) ...
+        # --- Run RustWorkX Leiden ---
+        rx_leiden_communities = []
+        rx_leiden_communities_rx_indices = [] # Leiden возвращает индексы RX
+        try:
+            print("\nRunning RustWorkX Leiden...")
+            rx_leiden_start = time.time()
+            rx_leiden_communities_raw, results["rx_leiden_memory"] = run_rx_leiden_algorithm(rx_graph)
+            rx_leiden_communities_rx_indices = rx_leiden_communities_raw # Сохраняем для модулярности
+            
+            # Конвертируем индексы RX в оригинальные ID узлов
+            reverse_map = {v: k for k, v in node_map.items()} # Используем ранее созданный node_map
+            rx_leiden_communities = [set(reverse_map[node_idx] for node_idx in c) for c in rx_leiden_communities_raw]
 
-    except FileNotFoundError as fnf_err:
-        print(f"❌ Critical Error: Dataset file not found: {fnf_err}")
-        print("Please ensure the required dataset files (e.g., GML, TXT) are present in the 'datasets' directory.")
-        return results # Return immediately on critical file error
+            results["rx_leiden_elapsed"] = time.time() - rx_leiden_start
+            results["rx_leiden_num_comms"] = len(rx_leiden_communities)
+            print(f"RustWorkX Leiden: {results['rx_leiden_num_comms']} communities in {format_time(results['rx_leiden_elapsed'])} using {format_memory(results['rx_leiden_memory'])}")
+
+            # --- Метрики для Leiden --- 
+            if rx_leiden_communities:
+                 # Модулярность (используем индексы RX)
+                try:
+                    weight_fn_for_rx = lambda edge: float(edge)
+                    results["rx_leiden_modularity"] = rx_modularity_calculation(
+                        rx_graph, rx_leiden_communities_rx_indices, weight_fn=weight_fn_for_rx
+                    )
+                except Exception as rx_mod_e:
+                    print(f"Warning: RX Leiden Modularity calculation failed: {rx_mod_e}")
+                    
+                # Внутренние метрики (используем оригинальные ID)
+                try:
+                    (
+                        results["rx_leiden_conductance"], results["rx_leiden_internal_density"],
+                        results["rx_leiden_avg_internal_degree"], results["rx_leiden_tpr"], results["rx_leiden_cut_ratio"],
+                        results["rx_leiden_surprise"], results["rx_leiden_significance"]
+                    ) = calculate_internal_metrics(graph_for_nx_cdlib, rx_leiden_communities, rx_graph, node_map)
+                except Exception as int_met_e:
+                    print(f"Warning: RX Leiden internal metric calculation failed: {int_met_e}")
+
+                # Внешние метрики (используем оригинальные ID)
+                if has_ground_truth:
+                    try:
+                        (results["rx_leiden_ari"], results["rx_leiden_nmi"], results["rx_leiden_homogeneity"],
+                         results["rx_leiden_completeness"], results["rx_leiden_v_measure"], results["rx_leiden_fmi"]) = compare_with_true_labels(rx_leiden_communities, true_labels)
+                    except Exception as ext_met_e:
+                        print(f"Warning: RX Leiden external metric calculation failed: {ext_met_e}")
+        
+        except Exception as e:
+            print(f"Error running RustWorkX Leiden: {str(e)}")
+            results["rx_leiden_elapsed"] = 0
+            results["rx_leiden_memory"] = 0
+            results["rx_leiden_num_comms"] = 0
+
+        # --- Spatial metrics based on 2D layout --- 
+        if rx_leiden_communities_rx_indices: # Only if Leiden communities were found
+            print("\nCalculating Spatial Metrics based on 2D Spring Layout...")
+            try:
+                # 1. Generate 2D layout (embeddings)
+                print("  Generating spring layout...")
+                layout_start_time = time.time()
+                # Ensure layout uses the RX graph and a seed for reproducibility
+                layout = rx.spring_layout(rx_graph, seed=fixed_seed)
+                print(f"  Layout generated in {format_time(time.time() - layout_start_time)}")
+
+                # 2. Prepare embeddings array in the correct order
+                # Assuming node indices in rx_graph are contiguous from 0 to num_nodes - 1
+                embeddings_np = np.zeros((num_nodes, 2), dtype=np.float32)
+                valid_indices = 0
+                for node_idx in rx_graph.node_indices():
+                    if node_idx in layout:
+                        embeddings_np[node_idx] = layout[node_idx]
+                        valid_indices += 1
+                    else:
+                        # Handle cases where layout might miss a node (shouldn't happen often)
+                        print(f"Warning: Node index {node_idx} not found in layout result.")
+                
+                if valid_indices != num_nodes:
+                     print(f"Warning: Layout generated for {valid_indices}/{num_nodes} nodes.")
+
+                # 3. Clusters are the RX Leiden results (rx_leiden_communities_rx_indices)
+                # Ensure it's the list of lists of RX indices
+                clusters_for_spatial = rx_leiden_communities_rx_indices
+
+                # 4. Call the spatial metrics function
+                print("  Calculating cluster spatial metrics...")
+                spatial_metrics_start_time = time.time()
+                spatial_metrics_list = spatial.cluster_spatial_metrics(embeddings_np, clusters_for_spatial)
+                print(f"  Spatial metrics calculated in {format_time(time.time() - spatial_metrics_start_time)}")
+
+                # 5. Calculate and print aggregated spatial metrics
+                if spatial_metrics_list:
+                    total_nodes_in_clusters = sum(m.size for m in spatial_metrics_list)
+                    if total_nodes_in_clusters > 0:
+                        weighted_avg_radius = sum(m.avg_radius * m.size for m in spatial_metrics_list) / total_nodes_in_clusters
+                        weighted_avg_std_radius = sum(m.std_radius * m.size for m in spatial_metrics_list) / total_nodes_in_clusters
+                        # Max radius aggregation might be less intuitive, perhaps report the overall max?
+                        overall_max_radius = max(m.max_radius for m in spatial_metrics_list if m.size > 0) if any(m.size > 0 for m in spatial_metrics_list) else 0.0
+                        weighted_mean_pairwise = sum(m.mean_pairwise * m.size for m in spatial_metrics_list) / total_nodes_in_clusters
+
+                        print(f"\n--- Aggregated Spatial Metrics for {dataset_name} (Leiden clusters, 2D Layout) ---")
+                        print(f"  Weighted Avg Radius: {weighted_avg_radius:.4f}")
+                        print(f"  Weighted Avg Std Radius: {weighted_avg_std_radius:.4f}")
+                        print(f"  Overall Max Radius: {overall_max_radius:.4f}")
+                        print(f"  Weighted Mean Pairwise Dist: {weighted_mean_pairwise:.4f}")
+                        print("------------------------------------------------------------------------------")
+                    else:
+                        print("\nSkipping aggregated spatial metrics: No nodes found in clusters.")
+                else:
+                    print("\nSkipping aggregated spatial metrics: Spatial metrics list is empty.")
+
+            except AttributeError as ae:
+                 # Catch potential issues if rx.spring_layout or spatial functions aren't available yet
+                 if "rustworkx" in str(ae) or "spatial" in str(ae):
+                     print(f"  Skipping spatial metrics: rustworkx function not found (likely needs compilation): {ae}")
+                 else:
+                     print(f"  Error calculating spatial metrics: {ae}")
+                     traceback.print_exc()
+            except Exception as e:
+                print(f"  Error calculating spatial metrics: {e}")
+                traceback.print_exc()
+        else:
+            print("\nSkipping spatial metrics calculation as Leiden communities were not found.")
+
+        # --- t-SNE/UMAP visualization removed ---
+
     except Exception as e:
         print(f"❌ Critical Error processing {dataset_name}: {str(e)}")
         traceback.print_exc()
-        return results # Return immediately on other critical error
+        # Ensure results dict is returned even on critical error, possibly with defaults
+        # Make sure 'nodes' and 'edges' might be 0 if loading failed early
+        results["nodes"] = results.get("nodes", 0) 
+        results["edges"] = results.get("edges", 0)
+        return results 
 
     print(f"\nFinished benchmark for {dataset_name}.")
     return results

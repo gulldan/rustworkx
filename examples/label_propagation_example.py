@@ -83,11 +83,11 @@ def main():
         
         # Draw nodes colored by community
         plt.figure(figsize=(10, 8))
-        colors = ['red', 'blue', 'green', 'yellow', 'orange', 'purple']
+        colors = ["red", "blue", "green", "yellow", "orange", "purple"]
         
-        for comm_id in set(nx.get_node_attributes(nx_graph, 'community').values()):
+        for comm_id in set(nx.get_node_attributes(nx_graph, "community").values()):
             comm_nodes = [n for n, d in nx_graph.nodes(data=True) 
-                          if d.get('community') == comm_id]
+                          if d.get("community") == comm_id]
             nx.draw_networkx_nodes(
                 nx_graph, pos, 
                 nodelist=comm_nodes,
@@ -98,16 +98,16 @@ def main():
         
         # Draw edges and labels
         nx.draw_networkx_edges(nx_graph, pos, width=1.0, alpha=0.5)
-        labels = {n: d.get('label') for n, d in nx_graph.nodes(data=True)}
+        labels = {n: d.get("label") for n, d in nx_graph.nodes(data=True)}
         nx.draw_networkx_labels(nx_graph, pos, labels, font_size=10)
         
         plt.title("Label Propagation Communities")
-        plt.axis('off')
+        plt.axis("off")
         plt.tight_layout()
-        plt.savefig('label_propagation_communities.png')
+        plt.savefig("label_propagation_communities.png")
         print("Graph visualization saved to 'label_propagation_communities.png'")
     except ImportError:
         print("NetworkX or matplotlib not available for visualization")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 

@@ -22,6 +22,7 @@ use crate::{weight_callable, FailedToConverge};
 
 use hashbrown::HashMap;
 use ndarray::prelude::*;
+use ndarray::linalg::Dot;
 use ndarray_stats::{DeviationExt, QuantileExt};
 use petgraph::prelude::*;
 use petgraph::visit::IntoEdgeReferences;
@@ -33,7 +34,7 @@ use sprs::{CsMat, TriMat};
 ///
 /// For details on the PageRank, refer to:
 ///
-/// L. Page, S. Brin, R. Motwani, and T. Winograd. “The PageRank Citation Ranking: Bringing order to the Web”.
+/// L. Page, S. Brin, R. Motwani, and T. Winograd. "The PageRank Citation Ranking: Bringing order to the Web".
 /// Stanford Digital Library Technologies Project, (1998).
 /// <http://dbpubs.stanford.edu:8090/pub/showDoc.Fulltext?lang=en&doc=1999-66&format=pdf>
 ///
@@ -196,14 +197,14 @@ pub fn pagerank(
             .zip(popularity.iter())
             .map(|(cond, pop)| if *cond { *pop } else { 0.0 })
             .sum();
-        let new_popularity =
-            alpha * ((&a * &popularity) + (dangling_sum * &dangling_weights)) + &damping;
-        let norm: f64 = new_popularity.l1_dist(&popularity).unwrap();
-        if norm < (n as f64) * tol {
+        let popularity_next =
+            alpha * (a.dot(&popularity) + (dangling_sum * &dangling_weights)) + &damping;
+        let error: f64 = (&popularity_next - &popularity).mapv(|x| x.abs()).sum();
+        if error < (n as f64) * tol {
             has_converged = true;
             break;
         } else {
-            popularity = new_popularity;
+            popularity = popularity_next;
         }
     }
 
@@ -230,7 +231,7 @@ pub fn pagerank(
 ///
 /// For details on the HITS algorithm, refer to:
 ///
-/// J.  Kleinberg. “Authoritative Sources in a Hyperlinked Environment”.
+/// J.  Kleinberg. "Authoritative Sources in a Hyperlinked Environment".
 /// Journal of the ACM, 46 (5), (1999).
 /// <http://www.cs.cornell.edu/home/kleinber/auth.pdf>
 ///
@@ -344,8 +345,8 @@ pub fn hits(
         // Instead of evaluating A^T @ A, which might not be sparse
         // we prefer to calculate A^T (A @ x); A @ x is a vector hence
         // we don't have to worry about sparsity
-        let temp_hub = &a * &authority;
-        let mut new_authority = &a_t * &temp_hub;
+        let temp_hub = a.dot(&authority);
+        let mut new_authority = a_t.dot(&temp_hub);
         new_authority /= *new_authority.max_skipnan();
         let norm: f64 = new_authority.l1_dist(&authority).unwrap();
         if norm < tol {
@@ -364,7 +365,7 @@ pub fn hits(
         )));
     }
 
-    let mut hubs = &a * &authority;
+    let mut hubs = a.dot(&authority);
 
     if normalized {
         hubs /= hubs.sum();

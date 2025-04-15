@@ -42,6 +42,7 @@ mod transitivity;
 mod traversal;
 mod tree;
 mod union;
+pub mod spatial;
 
 use bisimulation::*;
 use cartesian_product::*;
@@ -372,85 +373,90 @@ fn find_node_by_weight<Ty: EdgeType>(
     Ok(index)
 }
 
-fn generic_class_getitem(
-    cls: &Bound<'_, pyo3::types::PyType>,
-    key: &Bound<'_, PyAny>,
-) -> PyResult<PyObject> {
-    Python::with_gil(|py| -> PyResult<PyObject> {
-        let types_mod = py.import("types")?;
-        let types_generic_alias = types_mod.getattr("GenericAlias")?;
-        let args = (cls, key);
-        let generic_alias = types_generic_alias.call1(args)?;
-        Ok(generic_alias.into())
-    })
-}
+create_exception!(
+    rustworkx,
+    InvalidNode,
+    PyException,
+    "The provided node is invalid."
+);
+create_exception!(
+    rustworkx,
+    DAGWouldCycle,
+    PyException,
+    "Performing this operation would result in trying to add a cycle to a DAG."
+);
+create_exception!(
+    rustworkx,
+    NoEdgeBetweenNodes,
+    PyException,
+    "There is no edge present between the provided nodes."
+);
+create_exception!(
+    rustworkx,
+    DAGHasCycle,
+    PyException,
+    "The specified Directed Graph has a cycle and can't be treated as a DAG."
+);
+create_exception!(
+    rustworkx,
+    NoSuitableNeighbors,
+    PyException,
+    "No neighbors found matching the provided predicate."
+);
+create_exception!(
+    rustworkx,
+    NullGraph,
+    PyException,
+    "Invalid operation on a null graph"
+);
+create_exception!(
+    rustworkx,
+    NoPathFound,
+    PyException,
+    "No path was found between the specified nodes."
+);
+create_exception!(
+    rustworkx,
+    InvalidMapping,
+    PyException,
+    "No mapping was found for the request swapping"
+);
 
-// The provided node is invalid.
-create_exception!(rustworkx, InvalidNode, PyException);
-// Performing this operation would result in trying to add a cycle to a DAG.
-create_exception!(rustworkx, DAGWouldCycle, PyException);
-// There is no edge present between the provided nodes.
-create_exception!(rustworkx, NoEdgeBetweenNodes, PyException);
-// The specified Directed Graph has a cycle and can't be treated as a DAG.
-create_exception!(rustworkx, DAGHasCycle, PyException);
-// No neighbors found matching the provided predicate.
-create_exception!(rustworkx, NoSuitableNeighbors, PyException);
-// Invalid operation on a null graph
-create_exception!(rustworkx, NullGraph, PyException);
-// No path was found between the specified nodes.
-create_exception!(rustworkx, NoPathFound, PyException);
-// No mapping was found for the request swapping
-create_exception!(rustworkx, InvalidMapping, PyException);
 // Prune part of the search tree while traversing a graph.
 import_exception!(rustworkx.visit, PruneSearch);
 // Stop graph traversal.
 import_exception!(rustworkx.visit, StopSearch);
-// JSON Error
-create_exception!(rustworkx, JSONSerializationError, PyException);
-// JSON Error
-create_exception!(rustworkx, JSONDeserializationError, PyException);
-// Negative Cycle found on shortest-path algorithm
-create_exception!(rustworkx, NegativeCycle, PyException);
-// Failed to Converge on a solution
-create_exception!(rustworkx, FailedToConverge, PyException);
-// Graph is not bipartite
-create_exception!(rustworkx, GraphNotBipartite, PyException);
 
-/// Alias for louvain_communities function to maintain compatibility with tests
-#[pyfunction]
-#[pyo3(text_signature = "(graph, /, resolution=1.0, seed=None)")]
-#[pyo3(signature = (graph, resolution=None, seed=None))]
-pub fn label_propagation_communities(
-    py: Python,
-    graph: PyObject,
-    resolution: Option<f64>,
-    seed: Option<u64>,
-) -> PyResult<Vec<Vec<usize>>> {
-    crate::community::louvain::louvain_communities(
-        py,
-        graph,
-        None,
-        resolution.unwrap_or(1.0),
-        0.0000001,
-        seed,
-        None,
-    )
-}
-
-/// Calculate the modularity of a graph given a partition.
-/// See community::louvain::modularity for details.
-#[pyfunction]
-#[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
-#[pyo3(signature = (graph, partition, weight_fn=None, resolution=1.0))]
-pub fn modularity(
-    py: Python,
-    graph: PyObject,
-    partition: Vec<Vec<usize>>,
-    weight_fn: Option<PyObject>,
-    resolution: Option<f64>,
-) -> PyResult<f64> {
-    crate::community::louvain::modularity(py, graph, partition, weight_fn, resolution)
-}
+create_exception!(
+    rustworkx,
+    JSONSerializationError,
+    PyException,
+    "JSON Serialization Error"
+);
+create_exception!(
+    rustworkx,
+    JSONDeserializationError,
+    PyException,
+    "JSON Deserialization Error"
+);
+create_exception!(
+    rustworkx,
+    NegativeCycle,
+    PyException,
+    "Negative Cycle found on shortest-path algorithm"
+);
+create_exception!(
+    rustworkx,
+    FailedToConverge,
+    PyException,
+    "Failed to Converge on a solution"
+);
+create_exception!(
+    rustworkx,
+    GraphNotBipartite,
+    PyException,
+    "Graph is not bipartite"
+);
 
 #[pymodule]
 fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
@@ -635,16 +641,11 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::louvain::louvain_communities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::louvain::label_propagation_communities,
-        m
-    )?)?;
+    m.add_function(wrap_pyfunction!(crate::community::louvain::louvain_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::cpm::cpm_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::leiden::leiden_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::louvain::label_propagation_communities, m)?)?;
     m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
-    m.add_wrapped(wrap_pyfunction!(modularity))?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;
@@ -708,5 +709,6 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<ColoringStrategy>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
     m.add_wrapped(wrap_pymodule!(community::community))?;
+    m.add_wrapped(wrap_pymodule!(spatial::spatial))?;
     Ok(())
 }

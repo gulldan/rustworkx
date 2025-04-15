@@ -1,0 +1,19 @@
+stages:
+  - publish
+
+variables:
+  PYPI_URL: "http://localhost:8080/"
+  MATURIN_USERNAME: $MATURIN_PASSWORD
+
+publish-pypi:
+  stage: publish
+  image: ghcr.io/pyo3/maturin:latest
+  script:
+    - maturin build --release --out dist --manylinux 2014
+    - maturin publish --no-sdist --repository-url "$PYPI_URL" --manylinux 2014
+  only:
+    - main
+  environment:
+    name: publish
+  variables:
+    MATURIN_PASSWORD: $MATURIN_PASSWORD 
