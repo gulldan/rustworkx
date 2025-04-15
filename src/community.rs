@@ -20,4 +20,4 @@ pub fn community(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     // Add cliques function
     m.add_function(wrap_pyfunction!(cliques::find_maximal_cliques, m)?)?;
     Ok(())
-}
+} 

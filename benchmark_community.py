@@ -77,7 +77,7 @@ except Exception as e:
     print(f"Error checking rustworkx attributes: {e}")
 
 # Импорт spatial биндингов
-from rustworkx import spatial
+# from rustworkx import spatial # REMOVE THIS LINE
 
 
 def run_benchmark():
@@ -320,7 +320,7 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
 
         # Convert graph (uses imported utility)
         rx_graph, node_map = convert_nx_to_rx(nx_graph)
-
+        
         # Prepare the graph that will be used by cdlib (needs to be NetworkX)
         # Create an undirected copy for algorithms that require it (like Louvain)
         graph_for_nx_cdlib = nx.Graph(nx_graph)
@@ -483,13 +483,13 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
 
         # --- Spatial metrics based on 2D layout --- 
         if rx_leiden_communities_rx_indices: # Only if Leiden communities were found
-            print("\nCalculating Spatial Metrics based on 2D Spring Layout...")
+            print("\nCalculating Spatial Metrics based on 2D Random Layout...")
             try:
                 # 1. Generate 2D layout (embeddings)
-                print("  Generating spring layout...")
+                print("  Generating random layout...")
                 layout_start_time = time.time()
                 # Ensure layout uses the RX graph and a seed for reproducibility
-                layout = rx.spring_layout(rx_graph, seed=fixed_seed)
+                layout = rx.random_layout(rx_graph, seed=fixed_seed)
                 print(f"  Layout generated in {format_time(time.time() - layout_start_time)}")
 
                 # 2. Prepare embeddings array in the correct order
@@ -511,10 +511,11 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
                 # Ensure it's the list of lists of RX indices
                 clusters_for_spatial = rx_leiden_communities_rx_indices
 
-                # 4. Call the spatial metrics function
+                # 4. Call the spatial metrics function - USE rx.spatial
                 print("  Calculating cluster spatial metrics...")
                 spatial_metrics_start_time = time.time()
-                spatial_metrics_list = spatial.cluster_spatial_metrics(embeddings_np, clusters_for_spatial)
+                # Use rx.spatial directly
+                spatial_metrics_list = rx.spatial.cluster_spatial_metrics(embeddings_np, clusters_for_spatial)
                 print(f"  Spatial metrics calculated in {format_time(time.time() - spatial_metrics_start_time)}")
 
                 # 5. Calculate and print aggregated spatial metrics
@@ -539,9 +540,9 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
                     print("\nSkipping aggregated spatial metrics: Spatial metrics list is empty.")
 
             except AttributeError as ae:
-                 # Catch potential issues if rx.spring_layout or spatial functions aren't available yet
+                 # Catch potential issues if rx.spatial functions aren't available yet
                  if "rustworkx" in str(ae) or "spatial" in str(ae):
-                     print(f"  Skipping spatial metrics: rustworkx function not found (likely needs compilation): {ae}")
+                     print(f"  Skipping spatial metrics: rustworkx.spatial function not found (likely needs compilation or version update): {ae}") # Updated message
                  else:
                      print(f"  Error calculating spatial metrics: {ae}")
                      traceback.print_exc()
@@ -555,7 +556,7 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
 
     except Exception as e:
         print(f"❌ Critical Error processing {dataset_name}: {str(e)}")
-        traceback.print_exc()
+        traceback.print_exc() 
         # Ensure results dict is returned even on critical error, possibly with defaults
         # Make sure 'nodes' and 'edges' might be 0 if loading failed early
         results["nodes"] = results.get("nodes", 0) 
@@ -564,7 +565,6 @@ def run_benchmark_on_dataset(dataset_name, load_func, result_folder):
 
     print(f"\nFinished benchmark for {dataset_name}.")
     return results
-
 
 def main():
     """

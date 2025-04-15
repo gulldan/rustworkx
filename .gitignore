@@ -26,3 +26,4 @@ retworkx/*pyd
 retworkx-core/Cargo.lock
 **/.DS_Store
 venv/
+.pytest_cache/
