@@ -34,6 +34,7 @@ mod planar;
 mod random_graph;
 mod score;
 mod shortest_path;
+pub mod spatial;
 mod steiner_tree;
 mod tensor_product;
 mod token_swapper;
@@ -42,7 +43,6 @@ mod transitivity;
 mod traversal;
 mod tree;
 mod union;
-pub mod spatial;
 
 use bisimulation::*;
 use cartesian_product::*;
@@ -641,10 +641,23 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
-    m.add_function(wrap_pyfunction!(crate::community::louvain::louvain_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::louvain::louvain_communities,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(crate::community::cpm::cpm_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::leiden::leiden_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::louvain::label_propagation_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::leiden::leiden_communities,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::louvain::louvain_communities,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        crate::community::lpa::label_propagation_communities,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
@@ -708,7 +721,6 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<iterators::BiconnectedComponents>()?;
     m.add_class::<ColoringStrategy>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
-    m.add_wrapped(wrap_pymodule!(community::community))?;
     m.add_wrapped(wrap_pymodule!(spatial::spatial))?;
     Ok(())
 }

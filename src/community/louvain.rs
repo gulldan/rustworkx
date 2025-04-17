@@ -9,6 +9,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+// https://arxiv.org/abs/0803.0476
 
 use ahash::AHashMap;
 use ahash::AHashSet;
@@ -51,15 +52,11 @@ impl GraphState {
     /// # Returns
     /// * GraphState - The initialized graph state for Louvain algorithm
     /// * PyErr - If edge weights are not positive or other errors occur
-    fn from_pygraph(
-        py: Python,
-        graph: &PyGraph,
-        weight_fn: Option<&PyObject>,
-    ) -> PyResult<Self> {
+    fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: Option<&PyObject>) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
         let mut adj = vec![AHashMap::new(); num_nodes];
         let mut total_weight = 0.0;
-        
+
         // Initialize node metadata with singleton sets
         let mut node_metadata: Vec<AHashSet<usize>> = Vec::with_capacity(num_nodes);
         for i in 0..num_nodes {
@@ -67,27 +64,28 @@ impl GraphState {
             set.insert(i);
             node_metadata.push(set);
         }
-        
+
         // Convert PyGraph to adjacency list format
         for edge in graph.graph.edge_references() {
             let u = edge.source().index();
             let v = edge.target().index();
             let weight_payload = edge.weight();
-            
+
             // Call the weight function or default to 1.0
             let weight_fn_option: Option<PyObject> = weight_fn.cloned();
             let weight = weight_callable(py, &weight_fn_option, weight_payload, 1.0)?;
-            
+
             if weight <= 0.0 {
                 return Err(PyValueError::new_err(
                     "Louvain algorithm requires positive edge weights.",
                 ));
             }
-            
+
             *adj[u].entry(v).or_insert(0.0) += weight;
             *adj[v].entry(u).or_insert(0.0) += weight; // Undirected graph
-            
-            if u <= v { // Avoid double counting
+
+            if u <= v {
+                // Avoid double counting
                 total_weight += 2.0 * weight; // 2m = sum of all degrees
             }
         }
@@ -99,7 +97,7 @@ impl GraphState {
             node_metadata,
         })
     }
-    
+
     /// Generate a new aggregated graph based on partition
     ///
     /// # Arguments
@@ -114,36 +112,36 @@ impl GraphState {
             community_ids.insert(comm);
         }
         let num_communities = community_ids.len();
-        
+
         // Create community -> new node id mapping
         let mut comm_to_new_id = AHashMap::with_capacity(num_communities);
-        
+
         // Use enumerate for the loop counter
         for (idx, comm) in community_ids.into_iter().enumerate() {
             comm_to_new_id.insert(comm, idx);
         }
-        
+
         // Initialize new graph
         let mut new_adj = vec![AHashMap::new(); num_communities];
         let mut new_node_metadata = vec![AHashSet::new(); num_communities];
-        
+
         // Aggregate nodes into communities
         for node in 0..self.num_nodes {
             let comm = node_to_comm[node];
             let new_node = *comm_to_new_id.get(&comm).unwrap();
-            
+
             // Add original node identifiers to the new metadata
             new_node_metadata[new_node].extend(self.node_metadata[node].iter());
-            
+
             // Aggregate edges
             for (&neighbor, &weight) in &self.adj[node] {
                 let neighbor_comm = node_to_comm[neighbor];
                 let new_neighbor = *comm_to_new_id.get(&neighbor_comm).unwrap();
-                
+
                 *new_adj[new_node].entry(new_neighbor).or_insert(0.0) += weight;
             }
         }
-        
+
         // The total weight remains the same after aggregation
         GraphState {
             num_nodes: num_communities,
@@ -167,17 +165,22 @@ impl GraphState {
 ///
 /// # Returns
 /// * A map from community IDs to total edge weights connecting to that community
-fn get_neighbor_weights(node: usize, node_to_comm: &[usize], adj: &[AHashMap<usize, f64>]) -> AHashMap<usize, f64> {
+fn get_neighbor_weights(
+    node: usize,
+    node_to_comm: &[usize],
+    adj: &[AHashMap<usize, f64>],
+) -> AHashMap<usize, f64> {
     let mut weights = AHashMap::new();
-    
+
     // Only include weights to neighbors, not self loops
     for (&neighbor, &weight) in &adj[node] {
-        if node != neighbor { // Skip self-loops
+        if node != neighbor {
+            // Skip self-loops
             let comm = node_to_comm[neighbor];
             *weights.entry(comm).or_insert(0.0) += weight;
         }
     }
-    
+
     weights
 }
 
@@ -201,69 +204,72 @@ fn run_one_level(
     let mut moved = false;
     let max_iterations = 10; // Maximum passes for node movement within a level
     let mut current_iteration = 0;
-    
+
     // Track the total degree of each community
     let mut community_degrees = AHashMap::with_capacity(graph.num_nodes);
-    
+
     // Use enumeration for node_to_comm
     for (node, &comm) in node_to_comm.iter().enumerate().take(graph.num_nodes) {
         let degree = graph.adj[node].values().sum::<f64>();
         *community_degrees.entry(comm).or_insert(0.0) += degree;
     }
-    
+
     // Randomize the node order for processing
     let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
     nodes.shuffle(rng);
-    
+
     // Continue until no more moves improve modularity or max iterations reached
     loop {
         let mut nb_moves = 0;
         current_iteration += 1;
-        
+
         for &node in &nodes {
             let current_comm = node_to_comm[node];
             let node_degree = graph.adj[node].values().sum::<f64>();
-            
+
             // Remove node from its current community
-            community_degrees.entry(current_comm)
+            community_degrees
+                .entry(current_comm)
                 .and_modify(|e| *e -= node_degree);
-            
+
             // Calculate weights to neighboring communities
             let neighbor_weights = get_neighbor_weights(node, node_to_comm, &graph.adj);
-            
+
             // Weight to current community for removal cost calculation
             let weight_to_current = *neighbor_weights.get(&current_comm).unwrap_or(&0.0);
-            
+
             // Calculate removal cost (negative of gain)
-            let remove_cost = -weight_to_current / m + 
-                              resolution * (community_degrees.get(&current_comm).unwrap_or(&0.0) * node_degree) / (2.0 * m * m);
-            
+            let remove_cost = -weight_to_current / m
+                + resolution * (community_degrees.get(&current_comm).unwrap_or(&0.0) * node_degree)
+                    / (2.0 * m * m);
+
             // Find the best community to join
             let mut best_comm = current_comm;
             let mut best_gain = 0.0;
-            
+
             for (&candidate_comm, &weight_to_comm) in &neighbor_weights {
                 // Skip current community as we already calculated its cost
                 if candidate_comm == current_comm {
                     continue;
                 }
-                
+
                 // Calculate gain for joining this community
                 let sigma_tot = *community_degrees.get(&candidate_comm).unwrap_or(&0.0);
-                let gain = remove_cost + weight_to_comm / m - 
-                           resolution * (sigma_tot * node_degree) / (2.0 * m * m);
-                
+                let gain = remove_cost + weight_to_comm / m
+                    - resolution * (sigma_tot * node_degree) / (2.0 * m * m);
+
                 if gain > best_gain {
                     best_gain = gain;
                     best_comm = candidate_comm;
                 }
             }
-            
+
             // Add node back to the best community found
-            community_degrees.entry(best_comm)
+            community_degrees
+                .entry(best_comm)
                 .and_modify(|e| *e += node_degree)
                 .or_insert(node_degree);
-            
+
             // If we found a better community, move the node
             if best_comm != current_comm {
                 node_to_comm[node] = best_comm;
@@ -271,7 +277,7 @@ fn run_one_level(
                 nb_moves += 1;
             }
         }
-        
+
         // Break if no moves were made in this pass or max iterations reached
         if nb_moves == 0 || current_iteration >= max_iterations {
             break;
@@ -306,38 +312,38 @@ fn run_louvain(
         Some(s) => StdRng::seed_from_u64(s),
         None => StdRng::from_entropy(),
     };
-    
+
     // Convert PyGraph to our internal format
     let mut graph_state = GraphState::from_pygraph(py, graph, weight_fn)?;
-    
+
     // Start with each node in its own community
     let mut node_to_comm: Vec<usize> = (0..graph_state.num_nodes).collect();
-    
+
     // Store the partitions at each level
     let mut partitions: Vec<Vec<Vec<usize>>> = Vec::new();
-    
+
     // Calculate initial modularity
     let mut current_modularity = calculate_modularity(&graph_state, &node_to_comm, resolution);
-    
+
     // Main loop: continue until no more improvement
     let mut improvement = true;
     while improvement {
         // Run one level of the algorithm
         improvement = run_one_level(&graph_state, &mut node_to_comm, resolution, &mut rng);
-        
+
         if !improvement {
             break;
         }
-        
+
         // Convert partition to the format expected by Python
         let mut partition = Vec::new();
         let max_comm = node_to_comm.iter().copied().max().unwrap_or(0);
-        
+
         // Initialize empty communities
         for _ in 0..=max_comm {
             partition.push(Vec::new());
         }
-        
+
         // Populate communities with original nodes
         // Use enumeration for node_to_comm access
         for (node, comm) in node_to_comm.iter().enumerate().take(graph_state.num_nodes) {
@@ -345,31 +351,31 @@ fn run_louvain(
                 partition[*comm].push(original_node);
             }
         }
-        
+
         // Remove empty communities
         partition.retain(|comm| !comm.is_empty());
-        
+
         // Add this level's partition to results
         partitions.push(partition);
-        
+
         // Calculate modularity for new partition
         let new_modularity = calculate_modularity(&graph_state, &node_to_comm, resolution);
-        
+
         // Check if modularity improvement is significant
         if new_modularity - current_modularity <= threshold {
             break;
         }
-        
+
         current_modularity = new_modularity;
-        
+
         // Create aggregated graph for next level
         let new_graph = graph_state.aggregate(&node_to_comm);
-        
+
         // Prepare for next level
         graph_state = new_graph;
         node_to_comm = (0..graph_state.num_nodes).collect();
     }
-    
+
     Ok(partitions)
 }
 
@@ -387,39 +393,39 @@ fn calculate_modularity(graph: &GraphState, node_to_comm: &[usize], resolution: 
     if m == 0.0 {
         return 0.0; // No edges means no modularity
     }
-    
+
     let mut q = 0.0;
     let mut external_degrees = AHashMap::with_capacity(graph.num_nodes);
     let mut internal_degrees = AHashMap::with_capacity(graph.num_nodes);
-    
+
     // Calculate total weight within each community and between communities
     for node in 0..graph.num_nodes {
         let comm = node_to_comm[node];
         let mut internal_weight = 0.0;
         let node_degree = graph.adj[node].values().sum::<f64>();
-        
+
         for (&neighbor, &weight) in &graph.adj[node] {
             let neighbor_comm = node_to_comm[neighbor];
             if comm == neighbor_comm {
                 internal_weight += weight;
             }
         }
-        
+
         // Add to internal weight of community
         *internal_degrees.entry(comm).or_insert(0.0) += internal_weight;
-        
+
         // Add to total degree of community
         *external_degrees.entry(comm).or_insert(0.0) += node_degree;
     }
-    
+
     // Calculate modularity: sum over communities
     for comm in external_degrees.keys() {
         let comm_internal = *internal_degrees.get(comm).unwrap_or(&0.0);
         let comm_degree = *external_degrees.get(comm).unwrap_or(&0.0);
-        
-        q += comm_internal / m - resolution * (comm_degree / m) * (comm_degree / m);
+
+        q += comm_internal / (2.0 * m) - resolution * (comm_degree / m).powi(2);
     }
-    
+
     q // Modularity definition doesn't require division by 2 here as internal_weight is sum over edges (each edge counted once)
 }
 
@@ -432,21 +438,25 @@ fn calculate_modularity(graph: &GraphState, node_to_comm: &[usize], resolution: 
 ///
 /// # Returns
 /// * Updated communities with small ones merged into larger ones
-fn merge_small_communities(graph: &PyGraph, communities: &[Vec<usize>], min_size: usize) -> Vec<Vec<usize>> {
+fn merge_small_communities(
+    graph: &PyGraph,
+    communities: &[Vec<usize>],
+    min_size: usize,
+) -> Vec<Vec<usize>> {
     let mut result = communities.to_vec();
-    
+
     // If all communities are already at or above the min size, return early
     if communities.iter().all(|comm| comm.len() >= min_size) {
         return result;
     }
-    
+
     // Sort communities by size (largest first)
     result.sort_by_key(|comm| usize::MAX - comm.len());
-    
+
     // Separate into regular and small communities
     let mut normal_communities: Vec<Vec<usize>> = Vec::new();
     let mut small_communities: Vec<Vec<usize>> = Vec::new();
-    
+
     for comm in result {
         if comm.len() >= min_size {
             normal_communities.push(comm);
@@ -454,17 +464,17 @@ fn merge_small_communities(graph: &PyGraph, communities: &[Vec<usize>], min_size
             small_communities.push(comm);
         }
     }
-    
+
     // If no small communities, return early
     if small_communities.is_empty() {
         return normal_communities;
     }
-    
+
     // If all communities are small, keep the largest ones
     if normal_communities.is_empty() {
         let num_to_keep = std::cmp::min(small_communities.len(), 3);
         let mut kept = small_communities[0..num_to_keep].to_vec();
-        
+
         // Merge the remaining small communities
         if num_to_keep < small_communities.len() {
             let mut merged = Vec::new();
@@ -472,25 +482,25 @@ fn merge_small_communities(graph: &PyGraph, communities: &[Vec<usize>], min_size
             for small_comm in small_communities.iter().skip(num_to_keep) {
                 merged.extend(small_comm.iter().copied());
             }
-            
+
             if !merged.is_empty() {
                 kept.push(merged);
             }
         }
-        
+
         return kept;
     }
-    
+
     // For each small community, find the best larger community to merge with
     for small_comm in small_communities {
         // Count connections to each larger community
         let mut conn_counts = vec![0; normal_communities.len()];
-        
+
         for &node in &small_comm {
             // Find connections from this node to nodes in other communities
             for edge in graph.graph.edges(petgraph::graph::NodeIndex::new(node)) {
                 let neighbor = edge.target().index();
-                
+
                 // Check which community this neighbor belongs to
                 for (comm_idx, comm) in normal_communities.iter().enumerate() {
                     if comm.contains(&neighbor) {
@@ -500,25 +510,25 @@ fn merge_small_communities(graph: &PyGraph, communities: &[Vec<usize>], min_size
                 }
             }
         }
-        
+
         // Find community with most connections
         let mut best_comm_idx = 0;
         let mut max_connections = 0;
-        
+
         for (idx, &count) in conn_counts.iter().enumerate() {
             if count > max_connections {
                 max_connections = count;
                 best_comm_idx = idx;
             }
         }
-        
+
         // Merge with the best community (or the largest if no connections found)
         normal_communities[best_comm_idx].extend(small_comm);
     }
-    
+
     // Sort again by size
     normal_communities.sort_by_key(|comm| usize::MAX - comm.len());
-    
+
     normal_communities
 }
 
@@ -553,7 +563,9 @@ fn merge_small_communities(graph: &PyGraph, communities: &[Vec<usize>], min_size
 ///     TypeError: If the input is not a PyGraph.
 ///     ValueError: If any edge has a non-positive weight.
 #[pyfunction]
-#[pyo3(text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1)")]
+#[pyo3(
+    text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1)"
+)]
 #[pyo3(signature = (graph, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1))]
 pub fn louvain_communities(
     py: Python,
@@ -568,7 +580,7 @@ pub fn louvain_communities(
     let rx_mod = py.import("rustworkx")?;
     let py_graph_type = rx_mod.getattr("PyGraph")?;
     let py_digraph_type = rx_mod.getattr("PyDiGraph")?;
-    
+
     if graph.bind(py).is_instance(&py_digraph_type)? {
         return Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "Louvain method is not implemented for directed graphs (PyDiGraph).",
@@ -589,55 +601,29 @@ pub fn louvain_communities(
 
     // Handle weight function
     let weight_fn_ref = weight_fn.as_ref();
-    
+
     // Set min_community_size to 1 by default (meaning no merging)
     let min_size = min_community_size.unwrap_or(1);
-    
+
     // Run the algorithm
     let partitions = run_louvain(py, &graph_ref, weight_fn_ref, resolution, threshold, seed)?;
-    
+
     // Get the final partition
     let result = if partitions.is_empty() {
         // If no partitioning happened, return each node in its own community
-        (0..graph_ref.graph.node_count())
-            .map(|i| vec![i])
-            .collect()
+        (0..graph_ref.graph.node_count()).map(|i| vec![i]).collect()
     } else {
         let mut final_partition = partitions.last().unwrap().clone();
-        
+
         // If min_community_size is specified and > 1, merge small communities
         if min_size > 1 {
             final_partition = merge_small_communities(&graph_ref, &final_partition, min_size);
         }
-        
+
         final_partition
     };
 
     Ok(result)
-}
-
-/// Find communities in a graph using the label propagation method.
-/// 
-/// This is a temporary implementation that simply calls louvain_communities.
-///
-/// Args:
-///     graph: The undirected graph (PyGraph) to analyze.
-///     resolution: Resolution parameter for the modularity. Default is 1.0.
-///     seed: Optional random seed for reproducibility.
-///
-/// Returns:
-///     A list of communities, where each community is a list of node indices.
-#[pyfunction]
-#[pyo3(text_signature = "(graph, /, resolution=None, seed=None)")]
-#[pyo3(signature = (graph, resolution=None, seed=None))]
-pub fn label_propagation_communities(
-    py: Python,
-    graph: PyObject,
-    resolution: Option<f64>,
-    seed: Option<u64>,
-) -> PyResult<Vec<Vec<usize>>> {
-    // Just use Louvain for now (unweighted)
-    louvain_communities(py, graph, None, resolution.unwrap_or(1.0), 0.0000001, seed, None)
 }
 
 /// Calculate the modularity of a graph given a partition.
@@ -651,7 +637,7 @@ pub fn label_propagation_communities(
 ///         represented by a list of node indices.
 ///     weight_fn: An optional callable function to get edge weights. If None,
 ///         edges are considered unweighted (weight=1.0).
-///     resolution: The resolution parameter for the modularity calculation. 
+///     resolution: The resolution parameter for the modularity calculation.
 ///         Defaults to 1.0.
 ///
 /// Returns:
@@ -680,7 +666,7 @@ pub fn modularity(
             "Input graph must be a PyGraph instance.",
         ));
     }
-    
+
     let graph_ref = graph.extract::<PyGraph>(py)?;
 
     // Handle empty graph
@@ -688,7 +674,7 @@ pub fn modularity(
         if partition.is_empty() {
             return Ok(0.0); // Convention: empty graph has modularity 0
         } else {
-             return Err(pyo3::exceptions::PyValueError::new_err(
+            return Err(pyo3::exceptions::PyValueError::new_err(
                 "Partition must be empty for an empty graph.",
             ));
         }
@@ -702,8 +688,7 @@ pub fn modularity(
             if node_index >= num_nodes {
                 return Err(PyValueError::new_err(format!(
                     "Node index {} in partition is out of bounds for graph with {} nodes.",
-                    node_index,
-                    num_nodes
+                    node_index, num_nodes
                 )));
             }
             // Check if node is already assigned to another community
@@ -719,7 +704,7 @@ pub fn modularity(
 
     // Check if all nodes are assigned
     if node_to_comm.iter().any(|&c| c == usize::MAX) {
-         return Err(PyValueError::new_err(
+        return Err(PyValueError::new_err(
             "Partition does not cover all nodes in the graph.",
         ));
     }
