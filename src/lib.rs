@@ -10,6 +10,8 @@
 // License for the specific language governing permissions and limitations
 // under the License.
 
+#![allow(clippy::uninlined_format_args)]
+
 mod bisimulation;
 mod cartesian_product;
 mod centrality;
@@ -34,7 +36,6 @@ mod planar;
 mod random_graph;
 mod score;
 mod shortest_path;
-pub mod spatial;
 mod steiner_tree;
 mod tensor_product;
 mod token_swapper;
@@ -617,11 +618,15 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(number_strongly_connected_components))?;
     m.add_wrapped(wrap_pyfunction!(strongly_connected_components))?;
     m.add_wrapped(wrap_pyfunction!(is_strongly_connected))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_condensation))?;
+    m.add_wrapped(wrap_pyfunction!(graph_condensation))?;
     m.add_wrapped(wrap_pyfunction!(digraph_dfs_edges))?;
     m.add_wrapped(wrap_pyfunction!(graph_dfs_edges))?;
     m.add_wrapped(wrap_pyfunction!(digraph_find_cycle))?;
     m.add_wrapped(wrap_pyfunction!(digraph_k_shortest_path_lengths))?;
     m.add_wrapped(wrap_pyfunction!(graph_k_shortest_path_lengths))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_single_source_all_shortest_paths))?;
+    m.add_wrapped(wrap_pyfunction!(graph_single_source_all_shortest_paths))?;
     m.add_wrapped(wrap_pyfunction!(is_matching))?;
     m.add_wrapped(wrap_pyfunction!(is_maximal_matching))?;
     m.add_wrapped(wrap_pyfunction!(max_weight_matching))?;
@@ -641,24 +646,6 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::louvain::louvain_communities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(crate::community::cpm::cpm_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::leiden::leiden_communities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::louvain::louvain_communities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        crate::community::lpa::label_propagation_communities,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;
@@ -687,6 +674,8 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(connected_subgraphs))?;
     m.add_wrapped(wrap_pyfunction!(is_planar))?;
     m.add_wrapped(wrap_pyfunction!(read_graphml))?;
+    m.add_wrapped(wrap_pyfunction!(graph_write_graphml))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_write_graphml))?;
     m.add_wrapped(wrap_pyfunction!(digraph_node_link_json))?;
     m.add_wrapped(wrap_pyfunction!(graph_node_link_json))?;
     m.add_wrapped(wrap_pyfunction!(from_node_link_json_file))?;
@@ -720,7 +709,25 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<iterators::ProductNodeMap>()?;
     m.add_class::<iterators::BiconnectedComponents>()?;
     m.add_class::<ColoringStrategy>()?;
+    m.add_class::<Domain>()?;
+    m.add_class::<Type>()?;
+    m.add_class::<KeySpec>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
-    m.add_wrapped(wrap_pymodule!(spatial::spatial))?;
+    // Create and add the community submodule
+    let sub_mod = PyModule::new(py, "community")?;
+    community_mod(py, &sub_mod)?;
+    m.add_submodule(&sub_mod)?;
+    Ok(())
+}
+
+#[pymodule]
+fn community_mod(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(crate::community::cliques::find_maximal_cliques, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::cpm::cpm_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::leiden::leiden_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::louvain::louvain_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::lpa::label_propagation_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(crate::community::lpa::lpa_modularity, m)?)?;
     Ok(())
 }

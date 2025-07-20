@@ -12,7 +12,7 @@
 
 use crate::graph::PyGraph;
 // Removed StablePyGraph import as PyGraph uses petgraph::stable_graph::StableGraph directly
-use ahash::{AHashMap, AHashSet};
+use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
 // use itertools::Itertools; // Убрано, так как больше не используется
 use petgraph::graph::NodeIndex;
 use petgraph::unionfind::UnionFind;
@@ -53,6 +53,7 @@ const MAX_NODES_FOR_BITSET: usize = 64;
 ///     list[list[int]]: A list of communities, where each community is a list of node indices.
 ///         Communities can overlap.
 #[pyfunction]
+#[pyo3(signature = (graph, k, /), text_signature = "(graph, k, /)")]
 pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Vec<usize>>> {
     // --- Input Validation ---
     if k < 2 {
@@ -79,10 +80,10 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
     // as bitwise operations are faster for set intersections.
     if node_count <= MAX_NODES_FOR_BITSET {
         // --- Bitset Implementation Path ---
-        let mut node_map_fwd_bitset: AHashMap<NodeIndex, u32> = AHashMap::with_capacity(node_count);
+        let mut node_map_fwd_bitset: HashMap<NodeIndex, u32> = HashMap::with_capacity(node_count);
         let mut node_map_rev_bitset: Vec<NodeIndex> = Vec::with_capacity(node_count);
         // Adjacency represented by bitmasks (u64)
-        let mut adj_bitset: AHashMap<u32, u64> = AHashMap::with_capacity(node_count);
+        let mut adj_bitset: HashMap<u32, u64> = HashMap::with_capacity(node_count);
         let mut max_node_id_bitset = 0;
 
         // Map original NodeIndex to contiguous u32 indices (0 to node_count-1)
@@ -134,11 +135,11 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
         node_map_rev = node_map_rev_bitset; // Assign the reverse map for this path
     } else {
         // --- HashSet Implementation Path (for larger graphs) ---
-        let mut node_map_fwd_hashset: AHashMap<NodeIndex, u32> =
-            AHashMap::with_capacity(node_count);
+        let mut node_map_fwd_hashset: HashMap<NodeIndex, u32> =
+            HashMap::with_capacity(node_count);
         let mut node_map_rev_hashset: Vec<NodeIndex> = Vec::with_capacity(node_count);
         // Adjacency represented by HashSets
-        let mut adj_hashset: AHashMap<u32, AHashSet<u32>> = AHashMap::with_capacity(node_count);
+        let mut adj_hashset: HashMap<u32, HashSet<u32>> = HashMap::with_capacity(node_count);
         let mut max_node_id_hashset = 0;
 
         // Map original NodeIndex to contiguous u32 indices
@@ -146,7 +147,7 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
             let node_u32 = i as u32;
             node_map_fwd_hashset.insert(node_idx, node_u32);
             node_map_rev_hashset.push(node_idx);
-            adj_hashset.insert(node_u32, AHashSet::new()); // Initialize adjacency set
+            adj_hashset.insert(node_u32, HashSet::new()); // Initialize adjacency set
             max_node_id_hashset = max_node_id_hashset.max(node_u32);
         }
 
@@ -179,13 +180,13 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
     // --- Common Code: Build communities from k-cliques ---
 
     // Convert cliques from internal u32 indices back to original NodeIndex using the reverse map
-    let k_cliques: Vec<AHashSet<NodeIndex>> = k_cliques_u32
+    let k_cliques: Vec<HashSet<NodeIndex>> = k_cliques_u32
         .into_par_iter() // Parallel conversion for potentially many cliques
         .map(|clique_u32| {
             clique_u32
                 .into_iter()
                 .map(|node_u32| node_map_rev[node_u32 as usize]) // Map u32 back to NodeIndex
-                .collect::<AHashSet<NodeIndex>>()
+                .collect::<HashSet<NodeIndex>>()
         })
         .collect();
 
@@ -225,7 +226,7 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
 
     // Get the component label for each clique
     let labels = uf.into_labeling();
-    let mut communities_map: AHashMap<usize, AHashSet<NodeIndex>> = AHashMap::new();
+    let mut communities_map: HashMap<usize, HashSet<NodeIndex>> = HashMap::new();
 
     // Aggregate nodes from cliques belonging to the same component
     for (clique_index, component_label) in labels.iter().enumerate() {
@@ -251,8 +252,8 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
 /// Calculates degeneracy ordering using bitset representation for neighbors.
 /// This ordering helps optimize the Bron-Kerbosch algorithm by processing
 /// lower-degree nodes first.
-fn calculate_degeneracy_ordering_bitset(adj: &AHashMap<u32, u64>, num_nodes: usize) -> Vec<u32> {
-    let mut degrees: AHashMap<u32, usize> = AHashMap::with_capacity(num_nodes);
+fn calculate_degeneracy_ordering_bitset(adj: &HashMap<u32, u64>, num_nodes: usize) -> Vec<u32> {
+    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(num_nodes);
     let mut max_degree = 0;
 
     // Calculate initial degrees for all potential nodes up to num_nodes
@@ -333,7 +334,7 @@ fn calculate_degeneracy_ordering_bitset(adj: &AHashMap<u32, u64>, num_nodes: usi
 
 /// Find all k-cliques using Bron-Kerbosch with degeneracy ordering and bitsets.
 fn find_k_cliques_degeneracy_bitset(
-    adj: &AHashMap<u32, u64>,
+    adj: &HashMap<u32, u64>,
     num_nodes: usize,
     k: usize,
 ) -> Vec<Vec<u32>> {
@@ -344,7 +345,7 @@ fn find_k_cliques_degeneracy_bitset(
     let mut cliques = Vec::new();
     let degeneracy_order = calculate_degeneracy_ordering_bitset(adj, num_nodes);
     // Map nodes to their position in the degeneracy order for efficient checking
-    let node_pos: AHashMap<u32, usize> = degeneracy_order
+    let node_pos: HashMap<u32, usize> = degeneracy_order
         .iter()
         .enumerate()
         .map(|(i, &n)| (n, i))
@@ -400,7 +401,7 @@ fn find_k_cliques_degeneracy_bitset(
 /// P: candidates_mask (nodes that can extend R to form a larger clique)
 /// X: excluded_mask (nodes already processed that cannot extend R)
 fn bron_kerbosch_degeneracy_bitset_recursive(
-    adj: &AHashMap<u32, u64>,
+    adj: &HashMap<u32, u64>,
     cliques: &mut Vec<Vec<u32>>,
     potential_clique: &mut Vec<u32>,
     mut candidates_mask: u64, // P
@@ -460,13 +461,13 @@ fn bron_kerbosch_degeneracy_bitset_recursive(
 /// Calculates degeneracy ordering using HashSet representation for neighbors.
 /// (For graphs larger than MAX_NODES_FOR_BITSET)
 fn calculate_degeneracy_ordering_hashset(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     num_nodes: usize,
 ) -> Vec<u32> {
-    let mut degrees: AHashMap<u32, usize> = AHashMap::with_capacity(num_nodes);
+    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(num_nodes);
     let mut max_degree = 0;
     // Consider all potential node indices up to num_nodes, including isolated ones
-    let mut all_nodes: AHashSet<u32> = (0..num_nodes as u32).collect();
+    let mut all_nodes: HashSet<u32> = (0..num_nodes as u32).collect();
     for (&node, neighbors) in adj {
         let degree = neighbors.len();
         degrees.insert(node, degree);
@@ -485,7 +486,7 @@ fn calculate_degeneracy_ordering_hashset(
     }
 
     let mut order: Vec<u32> = Vec::with_capacity(num_nodes);
-    let mut processed: AHashSet<u32> = AHashSet::with_capacity(num_nodes);
+    let mut processed: HashSet<u32> = HashSet::with_capacity(num_nodes);
     let mut processed_count = 0;
 
     // Iteratively remove the node with the smallest degree
@@ -540,7 +541,7 @@ fn calculate_degeneracy_ordering_hashset(
 
 /// Find all k-cliques using Bron-Kerbosch with degeneracy ordering (HashSet version).
 fn find_k_cliques_degeneracy_hashset(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     num_nodes: usize,
     k: usize,
 ) -> Vec<Vec<u32>> {
@@ -549,13 +550,13 @@ fn find_k_cliques_degeneracy_hashset(
     }
     let mut cliques = Vec::new();
     let degeneracy_order = calculate_degeneracy_ordering_hashset(adj, num_nodes);
-    let node_pos: AHashMap<u32, usize> = degeneracy_order
+    let node_pos: HashMap<u32, usize> = degeneracy_order
         .iter()
         .enumerate()
         .map(|(i, &n)| (n, i))
         .collect();
     let mut potential_clique: Vec<u32> = Vec::with_capacity(k);
-    let empty_neighbors = AHashSet::new(); // Reusable empty set for nodes with no neighbors
+    let empty_neighbors = HashSet::new(); // Reusable empty set for nodes with no neighbors
 
     // Iterate through nodes in degeneracy order
     for &v in &degeneracy_order {
@@ -563,8 +564,8 @@ fn find_k_cliques_degeneracy_hashset(
         let neighbors_v = adj.get(&v).unwrap_or(&empty_neighbors);
 
         // Initialize candidates (P) and excluded (X) sets for the recursive call
-        let mut candidates: AHashSet<u32> = AHashSet::new();
-        let excluded: AHashSet<u32> = AHashSet::new(); // Excluded is empty at top level due to ordering
+        let mut candidates: HashSet<u32> = HashSet::new();
+        let excluded: HashSet<u32> = HashSet::new(); // Excluded is empty at top level due to ordering
 
         let v_pos = node_pos[&v];
         // Populate initial candidates: neighbors of v appearing later in the order
@@ -597,11 +598,11 @@ fn find_k_cliques_degeneracy_hashset(
 /// P: candidates
 /// X: excluded
 fn bron_kerbosch_degeneracy_hashset_recursive(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     cliques: &mut Vec<Vec<u32>>,
     potential_clique: &mut Vec<u32>, // R
-    mut candidates: AHashSet<u32>,   // P
-    mut excluded: AHashSet<u32>,     // X
+    mut candidates: HashSet<u32>,   // P
+    mut excluded: HashSet<u32>,     // X
     k: usize,
 ) {
     // Base case 1: Found a k-clique
@@ -619,7 +620,7 @@ fn bron_kerbosch_degeneracy_hashset_recursive(
 
     // Create a vec from candidates for iteration, as we modify `candidates` inside the loop.
     let candidates_vec: Vec<u32> = candidates.iter().cloned().collect();
-    let empty_neighbors = AHashSet::new();
+    let empty_neighbors = HashSet::new();
 
     for v in candidates_vec {
         // Check if v is still in candidates (it might have been removed by exclusion in a previous iteration)

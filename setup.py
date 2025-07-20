@@ -25,12 +25,13 @@ mpl_extras = ["matplotlib>=3.0"]
 graphviz_extras = ["pillow>=5.4"]
 
 PKG_NAME = os.getenv("RUSTWORKX_PKG_NAME", "rustworkx")
-PKG_VERSION = "0.17.0"
+PKG_VERSION = "0.17.1"
 PKG_PACKAGES = ["rustworkx", "rustworkx.visualization"]
 PKG_INSTALL_REQUIRES = ["numpy>=1.16.0,<3"]
-RUST_EXTENSIONS = [RustExtension("rustworkx.rustworkx", "Cargo.toml",
-                                 binding=Binding.PyO3, debug=rustworkx_debug)]
-RUST_OPTS ={"bdist_wheel": {"py_limited_api": "cp311"}}
+RUST_EXTENSIONS = [
+    RustExtension("rustworkx.rustworkx", "Cargo.toml", binding=Binding.PyO3, debug=rustworkx_debug)
+]
+RUST_OPTS = {"bdist_wheel": {"py_limited_api": "cp311"}}
 
 retworkx_readme_compat = """# retworkx
 

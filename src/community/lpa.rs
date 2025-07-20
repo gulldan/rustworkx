@@ -11,7 +11,7 @@
 // limitations under the License.
 // https://arxiv.org/pdf/0709.2938
 
-use ahash::AHashMap;
+use foldhash::{HashMap, HashMapExt};
 use petgraph::visit::EdgeRef;
 use petgraph::visit::IntoEdgeReferences;
 use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
@@ -49,7 +49,7 @@ use crate::graph::PyGraph;
 ///     ValueError: If `weighted` is True and the graph contains non-positive edge weights.
 #[pyfunction]
 #[pyo3(
-    signature = (graph, weighted=false, seed=None, max_iterations=Some(100)),
+    signature = (graph, /, weighted=false, seed=None, max_iterations=Some(100)),
     text_signature = "(graph, /, weighted=False, seed=None, max_iterations=100)"
 )]
 pub fn label_propagation_communities(
@@ -85,7 +85,7 @@ pub fn label_propagation_communities(
     // --- Initialization ---
     let mut rng = match seed {
         Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_entropy(),
+        None => StdRng::from_seed(rand::random()),
     };
 
     // Initially, each node is its own community (label = node index)
@@ -141,7 +141,7 @@ pub fn label_propagation_communities(
                 continue; // Skip isolated nodes (they keep their initial label)
             }
 
-            let mut label_scores: AHashMap<usize, f64> = AHashMap::new();
+            let mut label_scores: HashMap<usize, f64> = HashMap::new();
 
             // Calculate scores for neighbor labels
             for &(neighbor, weight) in &adj[node] {
@@ -181,7 +181,7 @@ pub fn label_propagation_communities(
     }
 
     // --- Post-processing: Convert labels to community lists ---
-    let mut communities_map: AHashMap<usize, Vec<usize>> = AHashMap::new();
+    let mut communities_map: HashMap<usize, Vec<usize>> = HashMap::new();
     for (node_index, &label) in node_labels.iter().enumerate() {
         communities_map.entry(label).or_default().push(node_index);
     }
@@ -223,7 +223,7 @@ pub fn label_propagation_communities(
 ///                 multiple communities).
 #[pyfunction]
 #[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
-#[pyo3(signature = (graph, partition, weight_fn=None, resolution=1.0))]
+#[pyo3(signature = (graph, partition, /, weight_fn=None, resolution=1.0))]
 pub fn lpa_modularity(
     py: Python,
     graph: PyObject,
@@ -285,8 +285,8 @@ pub fn lpa_modularity(
     // Calculate modularity
     let resolution_val = resolution.unwrap_or(1.0);
     let mut total_weight = 0.0;
-    let mut community_internal_weights: AHashMap<usize, f64> = AHashMap::new();
-    let mut community_degrees: AHashMap<usize, f64> = AHashMap::new();
+    let mut community_internal_weights: HashMap<usize, f64> = HashMap::new();
+    let mut community_degrees: HashMap<usize, f64> = HashMap::new();
 
     // Calculate weights and degrees
     for edge in graph_ref.graph.edge_references() {

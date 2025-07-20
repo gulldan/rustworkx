@@ -1,520 +1,1133 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+from typing import Any
+from collections.abc import Callable, Sequence  # Added for type hinting
 
-# Import formatters from the utils module
-from benchmark_utils import format_memory, format_time
+# from benchmark_utils import format_memory, format_time # Now imported by metrics_config
 from matplotlib.ticker import FuncFormatter
+import matplotlib.colors as mcolors
+from collections import defaultdict
+import logging  # Add logging import
 
-# Define colors for 3 algorithms (NX, RX Louvain, RX Leiden)
-NX_COLOR = "#4285F4"  # Blue
-RX_LOUVAIN_COLOR = "#34A853"  # Green
-RX_LEIDEN_COLOR = "#EA4335"  # Red (Was previously removed)
-GRID_COLOR = "#E5E5E5"
+# Import constants from metrics_config.py
+from metrics_config import ORDERED_METRIC_PROPERTIES, JACCARD_THRESHOLDS_TO_TEST
+from benchmark_utils import (
+    format_memory,
+    format_time,
+)  # It seems plotting.py still uses these directly for chart axis formatting
 
-def create_comparison_chart(benchmark_results, output_file="community_detection_comparison.png"):
+# Import ALGORITHMS_CONFIG_STRUCTURE from benchmark_config_data.py
+# This is the new single source of truth for algorithm metadata (name, prefix, color, run_args, etc.).
+# Also import RESOLUTIONS_TO_TEST and GRID_COLOR as they are used for plotting.
+from benchmark_config_data import ALGORITHMS_CONFIG_STRUCTURE, GRID_COLOR
+
+# Setup logger for this module
+logger = logging.getLogger(__name__)
+# BasicConfig should be handled by the main script (benchmark_community.py)
+
+# Define types for benchmark data structures for clarity
+BenchmarkResultItem = dict[str, Any]  # A dictionary representing results for one dataset
+BenchmarkResultsList = list[BenchmarkResultItem]  # A list of such dictionaries
+MetricProperty = dict[str, Any]  # A dictionary describing a metric (from ORDERED_METRIC_PROPERTIES)
+
+
+# Extract keys and names for convenience, maintaining order for table columns
+TABLE_COLUMN_KEYS: list[str] = [m["key"] for m in ORDERED_METRIC_PROPERTIES]
+TABLE_COLUMN_NAMES: list[str] = [m["name"] for m in ORDERED_METRIC_PROPERTIES]
+# Create a dictionary for quick lookup of metric properties by key
+METRIC_KEY_TO_PROPERTIES: dict[str, MetricProperty] = {m["key"]: m for m in ORDERED_METRIC_PROPERTIES}
+
+# Use ALGORITHMS_CONFIG_STRUCTURE directly, aliasing if needed for minimal changes within functions.
+ALGORITHMS_METADATA: list[dict[str, Any]] = (
+    ALGORITHMS_CONFIG_STRUCTURE  # Alias for less refactoring within this file
+)
+
+# Make formatter functions easily accessible by string name
+FORMATTER_FUNCTIONS: dict[str, Callable[[Any], str]] = {
+    "format_time": format_time,
+    "format_memory": format_memory,
+}
+
+
+def get_valid_benchmark_results(
+    benchmark_results_input: BenchmarkResultsList | None,
+) -> BenchmarkResultsList:
+    """Filters out placeholder or completely failed dataset results from the raw benchmark_results list.
+
+    A result is considered critically failed if it has an "error" field
+    and no algorithm within it was successfully attempted or completed
+    (indicated by an elapsed time >= 0). Placeholders with
+    status "skipped_placeholder" are also removed.
+
+    Args:
+        benchmark_results_input: The raw list of benchmark result items.
+            Each item is a dictionary containing metrics for a dataset.
+
+    Returns:
+        A new list containing only the valid benchmark result items.
+        Returns an empty list if input is None or empty.
     """
-    Create a comparative bar chart showing performance metrics with improved aesthetics and save to file.
-    Handles NaN values for metrics where ground truth was unavailable.
-    Includes NetworkX Louvain, RustWorkX Louvain, and RustWorkX Leiden.
+    if not benchmark_results_input:
+        return []
+
+    valid_results_output: BenchmarkResultsList = []
+    for res_item in benchmark_results_input:
+        # Skip if it's a placeholder status
+        if res_item.get("status") == "skipped_placeholder":
+            continue
+
+        # Determine if this dataset entry is critically errored (no algorithm attempted or completed)
+        # An algorithm is considered "attempted" if its_elapsed key exists and is >= 0 (0 or positive time)
+        # -1 means intentionally skipped, -2 (or other defaults) might mean not even initialized.
+        has_any_successful_algo: bool = False
+        for algo_meta_item in ALGORITHMS_METADATA:
+            # Construct the elapsed time key as stored by benchmark_community.py: algo_prefix + metric_key_base
+            # Example: "nx_louvain_res0p5" + "_elapsed" -> "nx_louvain_res0p5_elapsed"
+            elapsed_key_for_algo: str = f"{algo_meta_item['prefix']}_elapsed"
+            if res_item.get(elapsed_key_for_algo, -2) >= 0:  # -2 is a default if key not found
+                has_any_successful_algo = True
+                break
+
+        # If there's an error string AND no algorithm was successfully run or attempted, then skip this dataset entry.
+        if "error" in res_item and not has_any_successful_algo:
+            continue
+
+        valid_results_output.append(res_item)
+    return valid_results_output
+
+
+def create_comparison_chart(
+    benchmark_results: BenchmarkResultsList, output_file: str = "community_detection_comparison.png"
+) -> str | None:
+    """Creates a comparative bar chart of performance metrics.
+
+    The chart displays selected metrics for different algorithms across datasets.
+    Handles NaN values, algorithm skips, and log scales for time/memory.
+    Metrics are selected from `ORDERED_METRIC_PROPERTIES`.
+
+    Args:
+        benchmark_results: A list of benchmark result items.
+        output_file: The path to save the generated chart image.
+
+    Returns:
+        The `output_file` path if the chart is saved successfully,
+        otherwise None.
     """
-    if not benchmark_results:
-        print("No benchmark results available to create comparison chart")
+    benchmark_results_valid: BenchmarkResultsList = get_valid_benchmark_results(benchmark_results)
+    if not benchmark_results_valid:
+        logger.warning("No valid benchmark results to create comparison chart.")
         return None
 
-    datasets = [result["dataset"] for result in benchmark_results]
-    n_datasets = len(datasets)
-    n_algorithms = 3 # Now 3 algorithms
-    
+    datasets: list[str] = [result["dataset"] for result in benchmark_results_valid]
+    n_datasets: int = len(datasets)
+
+    # Select metrics for plotting from ORDERED_METRIC_PROPERTIES
+    # Prioritize external, internal, and performance. Exclude some for brevity or if they have dedicated plots.
+    chart_metrics_selection: list[MetricProperty] = [
+        prop
+        for prop in ORDERED_METRIC_PROPERTIES
+        if prop["type"] in ["external", "internal", "perf"]
+        and prop["key"]
+        not in [
+            "_surprise",
+            "_significance",
+            "_cut_ratio",
+            "_tpr",
+            "_avg_internal_degree",  # Often many, can clutter
+            "_homogeneity",
+            "_completeness",  # Usually covered by V-Measure
+            "_gcr",
+            "_pcp",  # Base keys for GCR/PCP, specific JTs might be too many
+        ]
+        and not prop["key"].startswith("_gcr_jt")
+        and not prop["key"].startswith("_pred_prec_jt")
+    ]
+    # Ensure at least elapsed and memory are there if filtered out by above
+    if not any(m["key"] == "_elapsed" for m in chart_metrics_selection):
+        chart_metrics_selection.append(METRIC_KEY_TO_PROPERTIES["_elapsed"])
+    if not any(m["key"] == "_memory" for m in chart_metrics_selection):
+        chart_metrics_selection.append(METRIC_KEY_TO_PROPERTIES["_memory"])
+
+    num_metrics_to_plot: int = len(chart_metrics_selection)
+    if num_metrics_to_plot == 0:
+        logger.warning("No metrics selected for chart plotting.")
+        return None
+
     plt.switch_backend("Agg")
-    
-    # Create figure for 12 subplots (7 external + 3 internal + 2 performance)
-    num_metrics = 12 
-    fig_height_per_metric = 6.0 
-    fig, axes = plt.subplots(num_metrics, 1, figsize=(16, num_metrics * fig_height_per_metric), dpi=300) 
-    plt.subplots_adjust(hspace=0.7) 
-    
-    # Flatten axes for easier indexing
-    ax_list = axes.flatten()
-    if len(ax_list) != num_metrics:
-        raise ValueError(f"Expected {num_metrics} axes, but got {len(ax_list)}")
-    
-    (ax_ari, ax_nmi, ax_homogeneity, ax_completeness, ax_vmeasure, ax_fmi, 
-     ax_modularity, ax_conductance, ax_internal_density, ax_avg_internal_path, 
-     ax_time, ax_memory) = ax_list
-    
-    # Adjust bar width and positions for three algorithms
-    bar_width = 0.25 # Adjusted bar width for 3 bars
-    r = np.arange(n_datasets)
-    r1 = r - bar_width
-    r2 = r
-    r3 = r + bar_width
+    fig_height_per_metric: float = 7.0
+    fig: plt.Figure
+    ax_list: np.ndarray[Any, np.dtype[plt.Axes]] | list[plt.Axes]  # Type for axes array or list
 
-    # Grid settings
-    grid_linewidth = 0.5
+    if num_metrics_to_plot == 1:
+        fig, ax_one = plt.subplots(1, 1, figsize=(26, fig_height_per_metric), dpi=200)
+        ax_list = [ax_one]
+    else:
+        fig, axes_array = plt.subplots(
+            num_metrics_to_plot, 1, figsize=(26, num_metrics_to_plot * fig_height_per_metric), dpi=200
+        )
+        ax_list = axes_array.flatten() if isinstance(axes_array, np.ndarray) else [axes_array]
 
-    # Helper function to add labels (now for three bars)
-    def add_labels(ax, rects_list, data_list, format_str=".3f"):
-        if len(rects_list) != len(data_list):
-            raise ValueError("Number of rects lists must match number of data lists")
-            
-        for rects, data in zip(rects_list, data_list):
-             for i, rect in enumerate(rects):
-                y_val = rect.get_height()
-                x_val = rect.get_x() + rect.get_width() / 2.0
-                label_y_offset = 0.015 * ax.get_ylim()[1]
-                if not np.isnan(data[i]):
-                    ax.text(x_val, y_val + label_y_offset, f"{data[i]:{format_str}}", 
-                            ha="center", va="bottom", fontweight="bold", fontsize=8)
+    plt.subplots_adjust(hspace=0.9 if num_metrics_to_plot > 1 else 0.1)
 
-    # Helper function to style axes (adjust xticks for three bars)
-    def style_axis(ax, ylabel, title):
-        ax.set_ylabel(ylabel, fontweight="bold", fontsize=14)
-        ax.set_title(title, fontweight="bold", fontsize=16)
-        ax.set_xticks(r) # Center ticks on the group
-        ax.set_xticklabels(datasets, rotation=45, ha="right", fontsize=12)
-        ax.yaxis.grid(True, linestyle="--", linewidth=grid_linewidth, color=GRID_COLOR)
-        ax.set_axisbelow(True)
-        ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=n_algorithms, 
-                  frameon=True, framealpha=0.9, edgecolor="#CCCCCC", fontsize=10)
+    n_algorithms_plot: int = len(ALGORITHMS_METADATA)
+    total_bar_space: float = 0.9
+    bar_width: float = total_bar_space / n_algorithms_plot
+    r_base: np.ndarray[Any, np.dtype[np.float64]] = np.arange(
+        n_datasets, dtype=float
+    )  # Ensure float for offsets
+    offsets: np.ndarray[Any, np.dtype[np.float64]] = np.linspace(
+        -total_bar_space / 2 + bar_width / 2, total_bar_space / 2 - bar_width / 2, n_algorithms_plot
+    )
+    algo_r_positions: dict[str, np.ndarray[Any, np.dtype[np.float64]]] = {
+        meta["prefix"]: r_base + offset for meta, offset in zip(ALGORITHMS_METADATA, offsets)
+    }
 
-    # --- External Quality Metrics --- 
-    # ARI
-    ari_nx = [result["nx_ari"] for result in benchmark_results]
-    ari_rx_louvain = [result["rx_louvain_ari"] for result in benchmark_results]
-    ari_rx_leiden = [result["rx_leiden_ari"] for result in benchmark_results] # Add Leiden data
-    rects1 = ax_ari.bar(r1, ari_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_ari.bar(r2, ari_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_ari.bar(r3, ari_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden bar
-    ax_ari.set_ylim(0, 1.05)
-    add_labels(ax_ari, [rects1, rects2, rects3], [ari_nx, ari_rx_louvain, ari_rx_leiden]) # Updated lists
-    style_axis(ax_ari, "Adjusted Rand Index (ARI)", "External Quality - ARI (higher is better, NaN if no ground truth)")
+    def add_value_labels_to_chart_bars(
+        ax_handle: plt.Axes,
+        rects_container_list: Sequence[
+            plt.Rectangle
+        ],  # Changed from list to Sequence for broader compatibility
+        data_values_list: list[float | None],
+        metric_property_dict: MetricProperty,
+        is_log_scale_local: bool,
+    ) -> None:
+        """Adds text labels above or below bars in a chart.
 
-    # NMI
-    nmi_nx = [result["nx_nmi"] for result in benchmark_results]
-    nmi_rx_louvain = [result["rx_louvain_nmi"] for result in benchmark_results]
-    nmi_rx_leiden = [result["rx_leiden_nmi"] for result in benchmark_results] # Add Leiden
-    rects1 = ax_nmi.bar(r1, nmi_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_nmi.bar(r2, nmi_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_nmi.bar(r3, nmi_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_nmi.set_ylim(0, 1.05)
-    add_labels(ax_nmi, [rects1, rects2, rects3], [nmi_nx, nmi_rx_louvain, nmi_rx_leiden])
-    style_axis(ax_nmi, "Normalized Mutual Info (NMI)", "External Quality - NMI (higher is better, NaN if no ground truth)")
-    
-    # Homogeneity
-    homogeneity_nx = [result["nx_homogeneity"] for result in benchmark_results]
-    homogeneity_rx_louvain = [result["rx_louvain_homogeneity"] for result in benchmark_results]
-    homogeneity_rx_leiden = [result["rx_leiden_homogeneity"] for result in benchmark_results] # Add Leiden
-    rects1 = ax_homogeneity.bar(r1, homogeneity_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_homogeneity.bar(r2, homogeneity_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_homogeneity.bar(r3, homogeneity_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_homogeneity.set_ylim(0, 1.05)
-    add_labels(ax_homogeneity, [rects1, rects2, rects3], [homogeneity_nx, homogeneity_rx_louvain, homogeneity_rx_leiden])
-    style_axis(ax_homogeneity, "Homogeneity Score", "External Quality - Homogeneity (higher is better, NaN if no ground truth)")
+        Args:
+            ax_handle: The Matplotlib Axes object for the subplot.
+            rects_container_list: A list of Rectangle objects (the bars).
+            data_values_list: The numerical data values corresponding to the bars.
+            metric_property_dict: Properties of the metric being plotted.
+            is_log_scale_local: True if the y-axis is on a log scale.
+        """
+        for bar_idx, rect_bar in enumerate(rects_container_list):
+            current_data_val = data_values_list[bar_idx]
+            if (
+                bar_idx >= len(data_values_list)
+                or current_data_val is None
+                or np.isnan(current_data_val)
+            ):
+                continue
 
-    # Completeness
-    completeness_nx = [result["nx_completeness"] for result in benchmark_results]
-    completeness_rx_louvain = [result["rx_louvain_completeness"] for result in benchmark_results]
-    completeness_rx_leiden = [result["rx_leiden_completeness"] for result in benchmark_results] # Add Leiden
-    rects1 = ax_completeness.bar(r1, completeness_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_completeness.bar(r2, completeness_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_completeness.bar(r3, completeness_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_completeness.set_ylim(0, 1.05)
-    add_labels(ax_completeness, [rects1, rects2, rects3], [completeness_nx, completeness_rx_louvain, completeness_rx_leiden])
-    style_axis(ax_completeness, "Completeness Score", "External Quality - Completeness (higher is better, NaN if no ground truth)")
+            y_coordinate: float = rect_bar.get_height()
+            x_coordinate: float = rect_bar.get_x() + rect_bar.get_width() / 2.0
 
-    # V-Measure
-    vmeasure_nx = [result["nx_v_measure"] for result in benchmark_results]
-    vmeasure_rx_louvain = [result["rx_louvain_v_measure"] for result in benchmark_results]
-    vmeasure_rx_leiden = [result["rx_leiden_v_measure"] for result in benchmark_results] # Add Leiden
-    rects1 = ax_vmeasure.bar(r1, vmeasure_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_vmeasure.bar(r2, vmeasure_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_vmeasure.bar(r3, vmeasure_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_vmeasure.set_ylim(0, 1.05)
-    add_labels(ax_vmeasure, [rects1, rects2, rects3], [vmeasure_nx, vmeasure_rx_louvain, vmeasure_rx_leiden])
-    style_axis(ax_vmeasure, "V-Measure Score", "External Quality - V-Measure (higher is better, NaN if no ground truth)")
+            label_y_pos: float = y_coordinate * 1.1 if y_coordinate >= 0 else y_coordinate * 0.9
+            if is_log_scale_local and y_coordinate > 1e-9:  # Adjusted positive check for log
+                label_y_pos = y_coordinate * 1.5
+            elif is_log_scale_local:  # Value is likely 0 or very small, position label near bottom
+                label_y_pos = ax_handle.get_ylim()[0] * 2  # Position relative to bottom of y-axis
 
-    # FMI
-    fmi_nx = [result["nx_fmi"] for result in benchmark_results]
-    fmi_rx_louvain = [result["rx_louvain_fmi"] for result in benchmark_results]
-    fmi_rx_leiden = [result["rx_leiden_fmi"] for result in benchmark_results] # Add Leiden
-    rects1 = ax_fmi.bar(r1, fmi_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_fmi.bar(r2, fmi_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_fmi.bar(r3, fmi_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_fmi.set_ylim(0, 1.05)
-    add_labels(ax_fmi, [rects1, rects2, rects3], [fmi_nx, fmi_rx_louvain, fmi_rx_leiden])
-    style_axis(ax_fmi, "Fowlkes–Mallows Index (FMI)", "External Quality - FMI (higher is better, NaN if no ground truth)")
+            text_label: str = "N/A"
+            formatter_func_name: str | None = metric_property_dict.get("format_func")
+            actual_formatter_func: Callable[[Any], str] | None = (
+                FORMATTER_FUNCTIONS.get(formatter_func_name)
+                if isinstance(formatter_func_name, str)
+                else None
+            )
 
-    # --- Internal Quality Metrics ---
-    # Modularity
-    modularity_nx = [result["nx_modularity"] for result in benchmark_results]
-    modularity_rx_louvain = [result["rx_louvain_modularity"] for result in benchmark_results]
-    modularity_rx_leiden = [result["rx_leiden_modularity"] for result in benchmark_results] # Add Leiden
-    all_mods = np.array([modularity_nx, modularity_rx_louvain, modularity_rx_leiden]).flatten()
-    min_mod = np.nanmin([np.nanmin(all_mods), 0])
-    max_mod = np.nanmax(all_mods)
-    max_mod = max_mod * 1.1 if not np.isnan(max_mod) else 1.0 
-    min_mod = min_mod if not np.isnan(min_mod) else 0.0
-    rects1 = ax_modularity.bar(r1, modularity_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_modularity.bar(r2, modularity_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_modularity.bar(r3, modularity_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_modularity.set_ylim(min_mod - abs(min_mod)*0.05, max_mod + abs(max_mod)*0.05) 
-    add_labels(ax_modularity, [rects1, rects2, rects3], [modularity_nx, modularity_rx_louvain, modularity_rx_leiden])
-    style_axis(ax_modularity, "Modularity Score", "Internal Quality - Modularity (higher is better)")
+            if metric_property_dict["key"] == "_elapsed" and current_data_val == -1:
+                text_label = "SKIPPED"
+            elif actual_formatter_func:
+                text_label = actual_formatter_func(current_data_val)
+            else:
+                try:
+                    text_label = f"{current_data_val:.2f}"
+                except (TypeError, ValueError):
+                    text_label = str(current_data_val)
 
-    # Conductance
-    conductance_nx = [result["nx_conductance"] for result in benchmark_results]
-    conductance_rx_louvain = [result["rx_louvain_conductance"] for result in benchmark_results]
-    conductance_rx_leiden = [result["rx_leiden_conductance"] for result in benchmark_results] # Add Leiden
-    all_conds = np.array([conductance_nx, conductance_rx_louvain, conductance_rx_leiden]).flatten()
-    min_cond = 0 
-    max_cond = np.nanmax(all_conds)
-    max_cond = max_cond * 1.1 if not np.isnan(max_cond) else 1.0 
-    max_cond = max(max_cond, 0.1) 
-    rects1 = ax_conductance.bar(r1, conductance_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_conductance.bar(r2, conductance_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_conductance.bar(r3, conductance_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_conductance.set_ylim(min_cond, max_cond)
-    add_labels(ax_conductance, [rects1, rects2, rects3], [conductance_nx, conductance_rx_louvain, conductance_rx_leiden])
-    style_axis(ax_conductance, "Avg. Conductance", "Internal Quality - Conductance (lower is better)")
+            ax_handle.text(
+                x_coordinate,
+                label_y_pos,
+                text_label,
+                ha="center",
+                va="bottom" if y_coordinate >= 0 else "top",
+                fontsize=4,
+                color="#333333",
+                rotation=90,
+            )
 
-    # Internal Edge Density
-    int_density_nx = [result["nx_internal_density"] for result in benchmark_results]
-    int_density_rx_louvain = [result["rx_louvain_internal_density"] for result in benchmark_results]
-    int_density_rx_leiden = [result["rx_leiden_internal_density"] for result in benchmark_results] # Add Leiden
-    all_dens = np.array([int_density_nx, int_density_rx_louvain, int_density_rx_leiden]).flatten()
-    min_dens = 0 
-    max_dens = np.nanmax(all_dens)
-    max_dens = max_dens * 1.1 if not np.isnan(max_dens) else 1.0 
-    max_dens = max(max_dens, 0.1) 
-    rects1 = ax_internal_density.bar(r1, int_density_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_internal_density.bar(r2, int_density_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_internal_density.bar(r3, int_density_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_internal_density.set_ylim(min_dens, max_dens)
-    add_labels(ax_internal_density, [rects1, rects2, rects3], [int_density_nx, int_density_rx_louvain, int_density_rx_leiden])
-    style_axis(ax_internal_density, "Avg. Internal Density", "Internal Quality - Cluster Density (higher is better)")
+    def style_chart_axis(ax_handle: plt.Axes, metric_property_dict_style: MetricProperty) -> None:
+        """Styles the axes, title, and legend of a chart subplot.
 
-    # Average Internal Path Length (Assuming this metric is not calculated for Leiden yet)
-    avg_path_nx = [result.get("nx_avg_internal_path", float("nan")) for result in benchmark_results]
-    avg_path_rx_louvain = [result.get("rx_louvain_avg_internal_path", float("nan")) for result in benchmark_results]
-    avg_path_rx_leiden = [result.get("rx_leiden_avg_internal_path", float("nan")) for result in benchmark_results] # Add Leiden placeholder
-    all_paths = np.array([avg_path_nx, avg_path_rx_louvain, avg_path_rx_leiden]).flatten()
-    min_path = 0 
-    max_path = np.nanmax(all_paths)
-    max_path = max_path * 1.1 if not np.isnan(max_path) else 1.0 
-    max_path = max(max_path, 1.0) 
-    rects1 = ax_avg_internal_path.bar(r1, avg_path_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_avg_internal_path.bar(r2, avg_path_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_avg_internal_path.bar(r3, avg_path_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_avg_internal_path.set_ylim(min_path, max_path)
-    add_labels(ax_avg_internal_path, [rects1, rects2, rects3], [avg_path_nx, avg_path_rx_louvain, avg_path_rx_leiden])
-    style_axis(ax_avg_internal_path, "Avg. Internal Path Length", "Internal Quality - Cluster Compactness (lower is better)")
+        Args:
+            ax_handle: The Matplotlib Axes object.
+            metric_property_dict_style: Properties of the metric for styling.
+        """
+        ax_handle.set_ylabel(metric_property_dict_style["name"], fontweight="bold", fontsize=10)
 
-    # --- Performance Metrics ---
-    # Execution time
-    time_nx = [result["nx_elapsed"] for result in benchmark_results]
-    time_rx_louvain = [result["rx_louvain_elapsed"] for result in benchmark_results]
-    time_rx_leiden = [result["rx_leiden_elapsed"] for result in benchmark_results] # Add Leiden
-    time_nx = [max(t, 1e-10) for t in time_nx]
-    time_rx_louvain = [max(t, 1e-10) for t in time_rx_louvain]
-    time_rx_leiden = [max(t, 1e-10) for t in time_rx_leiden] # Add Leiden
-    rects1 = ax_time.bar(r1, time_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_time.bar(r2, time_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_time.bar(r3, time_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_time.set_yscale("log")
-    ax_time.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.1e}" if x < 0.001 else f"{x:.3g}"))
-    # Add time labels (now for three bars)
-    all_times = [time_nx, time_rx_louvain, time_rx_leiden]
-    all_rects = [rects1, rects2, rects3]
-    for rects, times in zip(all_rects, all_times):
-        for i, v in enumerate(times):
-            if v > 1e-10:
-                ax_time.text(rects[i].get_x() + rects[i].get_width() / 2.0, v * 1.5, f"{format_time(v)}", 
-                             ha="center", va="bottom", fontweight="bold", fontsize=8, color="#333333")
-    style_axis(ax_time, "Execution Time (seconds)", "Performance - Execution Time (lower is better, log scale)")
-    
-    # Memory usage
-    memory_nx = [result.get("nx_memory", 0) for result in benchmark_results]
-    memory_rx_louvain = [result.get("rx_louvain_memory", 0) for result in benchmark_results]
-    memory_rx_leiden = [result.get("rx_leiden_memory", 0) for result in benchmark_results] # Add Leiden
-    memory_nx = [max(m, 1e-6) for m in memory_nx]
-    memory_rx_louvain = [max(m, 1e-6) for m in memory_rx_louvain]
-    memory_rx_leiden = [max(m, 1e-6) for m in memory_rx_leiden] # Add Leiden
-    rects1 = ax_memory.bar(r1, memory_nx, width=bar_width, label="NX Louvain", color=NX_COLOR)
-    rects2 = ax_memory.bar(r2, memory_rx_louvain, width=bar_width, label="RX Louvain", color=RX_LOUVAIN_COLOR)
-    rects3 = ax_memory.bar(r3, memory_rx_leiden, width=bar_width, label="RX Leiden", color=RX_LEIDEN_COLOR) # Add Leiden
-    ax_memory.set_yscale("log")
-    ax_memory.yaxis.set_major_formatter(FuncFormatter(lambda x, _: format_memory(x)))
-    # Add memory labels (now for three bars)
-    all_mems = [memory_nx, memory_rx_louvain, memory_rx_leiden]
-    all_rects = [rects1, rects2, rects3]
-    for rects, mems in zip(all_rects, all_mems):
-        for i, v in enumerate(mems):
-             if v > 1e-6:
-                ax_memory.text(rects[i].get_x() + rects[i].get_width() / 2.0, v * 1.5, f"{format_memory(v)}",
-                               ha="center", va="bottom", fontweight="bold", fontsize=8, color="#333333")
-    style_axis(ax_memory, "Peak Memory Usage (MB)", "Performance - Peak Memory Usage (lower is better, log scale)")
-    
-    # Overall figure title
-    fig.suptitle("Community Detection Benchmark: NetworkX vs RustWorkX (Louvain & Leiden)", fontsize=20, fontweight="bold", y=1.01)
-    
-    # Save the figure
+        title_text: str = metric_property_dict_style["name"]
+        if metric_property_dict_style.get("higher_is_better") is not None:
+            title_text += (
+                f" ({'higher' if metric_property_dict_style['higher_is_better'] else 'lower'} is better)"
+            )
+        # Check if y-axis is log scaled to append to title
+        if ax_handle.get_yaxis().get_scale() == "log":
+            title_text += " (log scale)"
+        ax_handle.set_title(title_text, fontweight="bold", fontsize=12, pad=20)  # Increased pad
+
+        ax_handle.set_xticks(r_base)
+        ax_handle.set_xticklabels(datasets, rotation=45, ha="right", fontsize=8)
+        ax_handle.yaxis.grid(True, linestyle="--", linewidth=0.5, color=GRID_COLOR, alpha=0.7)
+        ax_handle.set_axisbelow(True)
+
+        legend_handles: list[plt.Rectangle] = [
+            plt.Rectangle((0, 0), 1, 1, color=algo_meta_legend["color"])
+            for algo_meta_legend in ALGORITHMS_METADATA
+        ]
+        legend_labels: list[str] = [algo_meta_legend["name"] for algo_meta_legend in ALGORITHMS_METADATA]
+        # Adjust legend positioning based on number of algorithms
+        legend_ncol: int = min(n_algorithms_plot, 6)  # Max 6 columns for legend
+        legend_bbox_y_offset: float = -0.35 - (0.06 * (n_algorithms_plot // legend_ncol))
+        ax_handle.legend(
+            legend_handles,
+            legend_labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, legend_bbox_y_offset),
+            ncol=legend_ncol,
+            fontsize=7,
+            frameon=True,
+            framealpha=0.9,
+        )
+
+    for idx, current_metric_prop in enumerate(chart_metrics_selection):
+        ax_curr: plt.Axes = ax_list[idx]
+        metric_key_current: str = current_metric_prop["key"]
+        data_by_algo_curr: dict[str, list[float | None]] = {}  # Store numerical data, None for NaN
+        all_metric_vals_for_ylim: list[float] = []
+        is_log_scale_metric: bool = metric_key_current in ["_elapsed", "_memory"]
+
+        if is_log_scale_metric:
+            ax_curr.set_yscale("log")
+
+        for algo_meta_iter in ALGORITHMS_METADATA:
+            algo_prefix_iter: str = algo_meta_iter["prefix"]
+            full_metric_key_for_data: str = f"{algo_prefix_iter}{metric_key_current}"
+
+            data_series_for_algo: list[float | None] = []
+            for res_data_item in benchmark_results_valid:
+                # Special handling for intentionally skipped runs (elapsed == -1)
+                if res_data_item.get(f"{algo_prefix_iter}_elapsed") == -1:
+                    data_series_for_algo.append(
+                        -1.0 if metric_key_current == "_elapsed" else None
+                    )  # None for NaN
+                else:
+                    value: Any = res_data_item.get(full_metric_key_for_data)
+                    try:
+                        data_series_for_algo.append(float(value) if value is not None else None)
+                    except (ValueError, TypeError):
+                        data_series_for_algo.append(None)  # Treat conversion errors as NaN
+
+            data_by_algo_curr[algo_prefix_iter] = data_series_for_algo
+            # Collect valid values for y-limit calculation, excluding NaNs and our special -1 for skipped elapsed
+            all_metric_vals_for_ylim.extend(
+                [
+                    v
+                    for v in data_series_for_algo
+                    if v is not None
+                    and not np.isnan(v)
+                    and not (metric_key_current == "_elapsed" and v == -1)
+                ]
+            )
+
+        # --- Plotting bars for each algorithm ---
+        bar_rect_containers: dict[str, plt.barcontainer.BarContainer] = {}
+        for algo_meta_plot in ALGORITHMS_METADATA:
+            algo_prefix_plot: str = algo_meta_plot["prefix"]
+            series_to_plot: list[float | None] = data_by_algo_curr[algo_prefix_plot]
+            bar_positions: np.ndarray[Any, np.dtype[np.float64]] = algo_r_positions[algo_prefix_plot]
+
+            # For log scale, map values: >0 remains, <=0 or NaN becomes small positive for plotting or NaN
+            # The -1 for elapsed is a special "SKIPPED" indicator
+            if is_log_scale_metric:
+                series_adjusted_for_log: list[float] = [
+                    max(v, 1e-9)
+                    if (v is not None and not np.isnan(v) and v > 0)
+                    else (
+                        1e-10 if metric_key_current == "_elapsed" and v == -1 else 1e-9
+                    )  # Distinguish skipped slightly if needed, or map to baseline
+                    for v in series_to_plot
+                ]
+                rects_drawn: plt.barcontainer.BarContainer = ax_curr.bar(
+                    bar_positions,
+                    series_adjusted_for_log,
+                    width=bar_width,
+                    label=algo_meta_plot["name"],
+                    color=algo_meta_plot["color"],
+                )
+            else:
+                # For linear scale, plot NaNs as gaps
+                series_linear: list[float] = [v if v is not None else np.nan for v in series_to_plot]
+                rects_drawn: plt.barcontainer.BarContainer = ax_curr.bar(
+                    bar_positions,
+                    series_linear,
+                    width=bar_width,
+                    label=algo_meta_plot["name"],
+                    color=algo_meta_plot["color"],
+                )
+            bar_rect_containers[algo_prefix_plot] = rects_drawn
+
+        # --- Set Y-axis limits ---
+        if all_metric_vals_for_ylim:
+            y_min_data: float = min(all_metric_vals_for_ylim)
+            y_max_data: float = max(all_metric_vals_for_ylim)
+
+            if is_log_scale_metric:
+                # Ensure y_min_final_log is positive for log scale
+                y_min_final_log: float = max(1e-9, y_min_data / 5 if y_min_data > 1e-8 else 1e-9)
+                y_max_final_log: float = y_max_data * 5 if y_max_data > 1e-8 else 1
+                # Handle cases where min/max are too close or problematic for log
+                if y_min_final_log >= y_max_final_log:
+                    y_max_final_log = y_min_final_log * 100  # Ensure range
+                ax_curr.set_ylim(y_min_final_log, y_max_final_log)
+                # Apply custom formatters for log axes
+                if metric_key_current == "_elapsed":
+                    ax_curr.yaxis.set_major_formatter(
+                        FuncFormatter(lambda x, _: format_time(x if x > 1e-8 else 0))
+                    )
+                elif metric_key_current == "_memory":
+                    ax_curr.yaxis.set_major_formatter(FuncFormatter(lambda x, _: format_memory(x)))
+            else:  # Linear scale
+                data_range: float = y_max_data - y_min_data if (y_max_data - y_min_data) > 1e-6 else 0.1
+                padding_linear: float = data_range * 0.1
+                y_min_final_linear: float = (
+                    min(0, y_min_data - padding_linear)
+                    if (current_metric_prop.get("higher_is_better", True) and y_min_data >= 0)
+                    else (y_min_data - padding_linear)
+                )
+                y_max_final_linear: float = y_max_data + padding_linear
+                # For metrics like ARI, FMI, etc., ensure y-max is at least 1.0 if data is within [0,1]
+                if current_metric_prop.get("higher_is_better") and y_max_data <= 1.0 and y_min_data >= 0:
+                    y_max_final_linear = max(y_max_final_linear, 1.0)
+                if y_min_final_linear >= y_max_final_linear:
+                    y_max_final_linear = y_min_final_linear + 0.1  # Ensure range
+                ax_curr.set_ylim(y_min_final_linear, y_max_final_linear)
+        else:  # No valid data points, set default reasonable limits
+            if is_log_scale_metric:
+                ax_curr.set_ylim(1e-9, 1)
+            else:
+                ax_curr.set_ylim(0, 1)
+
+        # --- Add value labels and style axis ---
+        for algo_meta_label in ALGORITHMS_METADATA:
+            if algo_meta_label["prefix"] in bar_rect_containers:
+                add_value_labels_to_chart_bars(
+                    ax_curr,
+                    bar_rect_containers[algo_meta_label["prefix"]].patches,
+                    data_by_algo_curr[algo_meta_label["prefix"]],
+                    current_metric_prop,
+                    is_log_scale_metric,
+                )
+        style_chart_axis(ax_curr, current_metric_prop)  # Style after all data plotting and limit setting
+
+    fig.suptitle(
+        "Community Detection Benchmark: Algorithm Comparison", fontsize=22, fontweight="bold", y=1.00
+    )
     try:
-        plt.savefig(output_file, bbox_inches="tight", pad_inches=0.3)
-        print(f"Comparison chart saved successfully to {output_file}")
-    except Exception as e:
-        print(f"Error saving comparison chart: {e}")
+        plt.savefig(output_file, bbox_inches="tight", pad_inches=0.4)  # Increased pad
+        logger.info(f"Comparison chart saved successfully to {output_file}")
+    except Exception as e_save:
+        logger.error(f"Error saving comparison chart: {e_save}", exc_info=True)
     plt.close(fig)
     return output_file
 
 
-def generate_results_table(results):
+def generate_results_table(benchmark_results: BenchmarkResultsList) -> str:
+    """Generates a Markdown table from benchmark results.
+
+    The table includes results for each algorithm run, accounting for
+    parameterized runs. Metrics are ordered and formatted based on
+    `ORDERED_METRIC_PROPERTIES`.
+
+    Args:
+        benchmark_results: A list of benchmark result items.
+
+    Returns:
+        A string containing the Markdown formatted table.
+        Returns an error message string if no valid results are available.
     """
-    Generates a markdown table string summarizing benchmark results.
-    Includes NetworkX Louvain, RustWorkX Louvain, and RustWorkX Leiden.
-    Highlights the best result for each metric.
+    benchmark_results_valid: BenchmarkResultsList = get_valid_benchmark_results(benchmark_results)
+    if not benchmark_results_valid:
+        logger.warning("No valid benchmark results to display for Markdown table.")
+        return "No valid benchmark results to display for Markdown table."
+
+    # Use TABLE_COLUMN_NAMES (derived from ORDERED_METRIC_PROPERTIES) for the header
+    header_row_str: str = "| " + " | ".join(TABLE_COLUMN_NAMES) + " |"
+    separator_row_str: str = "|-" + "-|-".join(["-" * len(name) for name in TABLE_COLUMN_NAMES]) + "-|"
+    markdown_table_rows: list[str] = [header_row_str, separator_row_str]
+
+    for dataset_res_item in benchmark_results_valid:
+        # Common dataset information for all algorithm rows of this dataset
+        dataset_info_values_map: dict[str, str] = {}
+        for metric_prop_info_ds in ORDERED_METRIC_PROPERTIES:
+            if metric_prop_info_ds["type"] == "info" and metric_prop_info_ds["key"] != "algorithm_name":
+                dataset_info_values_map[metric_prop_info_ds["key"]] = str(
+                    dataset_res_item.get(metric_prop_info_ds["key"], "N/A")
+                )
+
+        for algo_metadata_item_md in ALGORITHMS_METADATA:
+            algo_key_prefix_md: str = algo_metadata_item_md["prefix"]
+            algo_name_display_md: str = algo_metadata_item_md["name"]
+
+            # Check if this specific algorithm run has data (e.g., elapsed time recorded)
+            elapsed_metric_full_key: str = (
+                f"{algo_key_prefix_md}_elapsed"  # Key used in benchmark_community.py
+            )
+
+            # If the primary elapsed key is not found, this algo run was likely not even initialized for this dataset
+            if (
+                elapsed_metric_full_key not in dataset_res_item
+                and f"{algo_key_prefix_md}{METRIC_KEY_TO_PROPERTIES['_elapsed']['key']}"
+                not in dataset_res_item
+            ):
+                # Check if ANY key for this algo_prefix exists, otherwise it was truly not run/recorded
+                if not any(k.startswith(algo_key_prefix_md) for k in dataset_res_item.keys()):
+                    continue  # Skip this algorithm row for this dataset
+
+            raw_elapsed_val_md: Any = dataset_res_item.get(
+                elapsed_metric_full_key,
+                dataset_res_item.get(
+                    f"{algo_key_prefix_md}{METRIC_KEY_TO_PROPERTIES['_elapsed']['key']}"
+                ),
+            )
+            is_skipped_this_algo_run: bool = raw_elapsed_val_md == -1
+
+            current_md_row_cells: list[str] = []
+            for metric_prop_md_col in ORDERED_METRIC_PROPERTIES:
+                col_key_md: str = metric_prop_md_col["key"]
+
+                if metric_prop_md_col["type"] == "info":
+                    if col_key_md == "algorithm_name":
+                        current_md_row_cells.append(algo_name_display_md)
+                    else:
+                        current_md_row_cells.append(dataset_info_values_map.get(col_key_md, "N/A"))
+                else:  # Metric column
+                    # Construct the full key as stored in benchmark_results
+                    # e.g. algo_prefix ('nx_louvain_res0p5') + metric_key_suffix ('_ari') -> 'nx_louvain_res0p5_ari'
+                    metric_data_key: str = f"{algo_key_prefix_md}{col_key_md}"
+                    raw_metric_val_md: Any = dataset_res_item.get(metric_data_key)
+
+                    formatted_cell_value: str = "N/A"  # Initialize before potential debug print
+                    # --- DEBUG PRINT ---
+                    if "_pcp_jt" in col_key_md or "_gcr_jt" in col_key_md:
+                        # Temporarily format for debug print, actual formatting happens later
+                        temp_formatted_debug: str = "N/A"
+                        if raw_metric_val_md is not None and not (
+                            isinstance(raw_metric_val_md, float) and np.isnan(raw_metric_val_md)
+                        ):
+                            temp_formatted_debug = f"{float(raw_metric_val_md):.3f}"
+                        logger.debug(
+                            f"TABLE DEBUG: Algo={algo_name_display_md}, Key='{metric_data_key}', RawValue={raw_metric_val_md}, TempFormattedDebug={temp_formatted_debug}"
+                        )
+                    # --- END DEBUG PRINT ---
+
+                    if is_skipped_this_algo_run and col_key_md not in ["_elapsed", "_memory"]:
+                        formatted_cell_value = "SKIPPED"
+                    elif raw_metric_val_md is not None:
+                        if isinstance(raw_metric_val_md, str) and raw_metric_val_md == "SKIPPED":
+                            formatted_cell_value = "SKIPPED"
+                        elif isinstance(raw_metric_val_md, float | int) and np.isnan(
+                            float(raw_metric_val_md)
+                        ):
+                            formatted_cell_value = "N/A"
+                        elif (
+                            col_key_md == "_elapsed" and raw_elapsed_val_md == -1
+                        ):  # Check original elapsed for skip
+                            formatted_cell_value = "SKIPPED"
+                        else:
+                            formatter_name_md: str | None = metric_prop_md_col.get("format_func")
+                            actual_formatter_md: Callable[[Any], str] | None = (
+                                FORMATTER_FUNCTIONS.get(formatter_name_md)
+                                if isinstance(formatter_name_md, str)
+                                else None
+                            )
+                            if actual_formatter_md:
+                                formatted_cell_value = actual_formatter_md(raw_metric_val_md)
+                            elif isinstance(raw_metric_val_md, float | int):
+                                val_fl_md: float = float(raw_metric_val_md)
+                                # Scientific notation for very small or very large numbers, else fixed point
+                                if abs(val_fl_md) > 1e4 or (abs(val_fl_md) < 0.001 and val_fl_md != 0):
+                                    formatted_cell_value = f"{val_fl_md:.2e}"
+                                else:
+                                    formatted_cell_value = f"{val_fl_md:.3f}"
+                            else:
+                                formatted_cell_value = str(raw_metric_val_md)
+                    current_md_row_cells.append(formatted_cell_value)
+
+            markdown_table_rows.append("| " + " | ".join(current_md_row_cells) + " |")
+
+    return "\n".join(markdown_table_rows)
+
+
+def get_color_for_cell_mpl(
+    value: Any,
+    metric_prop: MetricProperty,
+    norm_min: float | None,
+    norm_max: float | None,
+    is_overall_skipped: bool = False,
+    is_na_value: bool = False,
+) -> str:
+    """Determines a hex color string for a Matplotlib table cell.
+
+    Coloring is based on the metric's normalized value, indicating performance
+    (e.g., green for good, red for bad). Handles skipped or N/A values.
+
+    Args:
+        value: The raw metric value for the cell.
+        metric_prop: Properties of the metric being displayed.
+        norm_min: The minimum value for this metric in the current context
+            (used for normalization).
+        norm_max: The maximum value for this metric.
+        is_overall_skipped: True if the entire algorithm run for this row was skipped.
+        is_na_value: True if the specific cell value is N/A.
+
+    Returns:
+        A hex color string (e.g., "#FF0000").
     """
-    if not results:
-        return "No benchmark results to generate table."
+    if is_overall_skipped:
+        return "#DCDCDC"  # Lighter Gray for SKIPPED main content
+    if (
+        is_na_value
+        or value is None
+        or (isinstance(value, float) and np.isnan(value))
+        or norm_min is None
+        or norm_max is None
+    ):  # norm_min == norm_max removed to allow coloring even if all values are same (will be mid-color)
+        return "#FFFFFF"
 
-    # --- Header --- 
-    header = "| Dataset | Nodes | Edges | Algorithm | Time | Memory | # Comms | Modularity | Conductance | Int. Density | ARI | NMI | V-Measure |\n"
-    separator = "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-    table_string = header + separator
+    higher_is_better: bool | None = metric_prop.get("higher_is_better")
+    if higher_is_better is None:
+        return "#F5F5F5"
 
-    # --- Helper function to get best index (lower is better for time/memory/conductance, higher for others) ---
-    def get_best_idx(values, lower_is_better=False):
-        valid_values = [(i, v) for i, v in enumerate(values) if not (isinstance(v, float) and np.isnan(v))]
-        if not valid_values:
-            return -1
-        if lower_is_better:
-            best_idx, _ = min(valid_values, key=lambda item: item[1])
-        else:
-            best_idx, _ = max(valid_values, key=lambda item: item[1])
-        return best_idx
+    val_f: float
+    try:
+        val_f = float(value)
+    except (ValueError, TypeError):
+        return "#FFFFFF"
 
-    # --- Format values, handling None/NaN and highlighting best ---
-    def fmt(key, decimals=4, lower_is_better=False, is_time=False, is_memory=False):
-        nx_val = result.get(f"nx_{key}", float("nan"))
-        rx_l_val = result.get(f"rx_louvain_{key}", float("nan"))
-        rx_p_val = result.get(f"rx_leiden_{key}", float("nan")) # Changed from cpm to leiden
-        
-        values = [nx_val, rx_l_val, rx_p_val]
-        best_idx = get_best_idx(values, lower_is_better)
-        
-        formatted_values = []
-        for i, v in enumerate(values):
-            mark = " **" if i == best_idx else ""
-            end_mark = "**" if i == best_idx else ""
-            if isinstance(v, float) and np.isnan(v):
-                formatted_values.append("-")
-            elif is_time:
-                formatted_values.append(f"{mark}{format_time(v)}{end_mark}")
-            elif is_memory:
-                 formatted_values.append(f"{mark}{format_memory(v)}{end_mark}")
-            elif isinstance(v, int):
-                 formatted_values.append(f"{mark}{v}{end_mark}")
-            else:
-                formatted_values.append(f"{mark}{v:.{decimals}f}{end_mark}")
-        return formatted_values
+    norm_val: float
+    if norm_max == norm_min:  # All values for this metric in this context are the same
+        norm_val = 0.5  # Mid-point color
+    else:
+        norm_val = (val_f - norm_min) / (norm_max - norm_min)
 
-    # --- Table Rows --- 
-    for result in results:
-        dataset_name = result["dataset"]
-        nodes = result["nodes"]
-        edges = result["edges"]
+    if not higher_is_better:
+        norm_val = 1.0 - norm_val
 
-        # Format metrics for all three algorithms
-        time_fmt = fmt("elapsed", is_time=True, lower_is_better=True)
-        mem_fmt = fmt("memory", is_memory=True, lower_is_better=True)
-        comms_fmt = fmt("num_comms", decimals=0)
-        mod_fmt = fmt("modularity")
-        cond_fmt = fmt("conductance", lower_is_better=True)
-        dens_fmt = fmt("internal_density")
-        ari_fmt = fmt("ari")
-        nmi_fmt = fmt("nmi")
-        vm_fmt = fmt("v_measure")
+    norm_val = max(0.0, min(1.0, norm_val))
 
-        # Create rows for each algorithm
-        table_string += f"| {dataset_name} | {nodes} | {edges} | NX Louvain | {time_fmt[0]} | {mem_fmt[0]} | {comms_fmt[0]} | {mod_fmt[0]} | {cond_fmt[0]} | {dens_fmt[0]} | {ari_fmt[0]} | {nmi_fmt[0]} | {vm_fmt[0]} |\n"
-        table_string += f"| {' ':<{len(dataset_name)}} | {' ':<{len(str(nodes))}} | {' ':<{len(str(edges))}} | RX Louvain | {time_fmt[1]} | {mem_fmt[1]} | {comms_fmt[1]} | {mod_fmt[1]} | {cond_fmt[1]} | {dens_fmt[1]} | {ari_fmt[1]} | {nmi_fmt[1]} | {vm_fmt[1]} |\n"
-        table_string += f"| {' ':<{len(dataset_name)}} | {' ':<{len(str(nodes))}} | {' ':<{len(str(edges))}} | RX Leiden  | {time_fmt[2]} | {mem_fmt[2]} | {comms_fmt[2]} | {mod_fmt[2]} | {cond_fmt[2]} | {dens_fmt[2]} | {ari_fmt[2]} | {nmi_fmt[2]} | {vm_fmt[2]} |\n" # Changed CPM to Leiden
+    cmap: mcolors.LinearSegmentedColormap = mcolors.LinearSegmentedColormap.from_list(
+        "custom_rg", [(0, "#FFBABA"), (0.5, "#FFFFC8"), (1, "#BAFFBA")]
+    )
+    return mcolors.to_hex(cmap(norm_val))  # Return hex string
 
-    return table_string
 
-def generate_results_table_matplotlib(results, output_file="benchmark_results_table.png"):
+def generate_results_table_matplotlib(
+    benchmark_results: BenchmarkResultsList, output_file: str = "results/benchmark_results_table.png"
+) -> None:
+    """Generates a results table as a PNG image using Matplotlib.
+
+    The table displays detailed benchmark results with cells colored by
+    performance. Handles dynamic data presence and formatting.
+
+    Args:
+        benchmark_results: A list of benchmark result items.
+        output_file: The path to save the generated table image.
     """
-    Generates a table summarizing benchmark results as a PNG image using Matplotlib.
-    Includes NetworkX Louvain, RustWorkX Louvain, and RustWorkX Leiden.
-    Highlights the best result for each metric.
-    """
-    if not results:
-        print("No benchmark results to generate table image.")
+    benchmark_results_valid: BenchmarkResultsList = get_valid_benchmark_results(benchmark_results)
+    if not benchmark_results_valid:
+        logger.warning("No valid benchmark results to create Matplotlib table.")
         return
 
-    plt.switch_backend("Agg")
+    table_cell_text_data: list[list[str]] = []
+    # Store raw values for coloring: metric_key_suffix -> dataset_name -> list of raw float values
+    raw_cell_values_for_color: defaultdict[str, defaultdict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    # Track which algos ran for which datasets: dataset_name -> list of algo_meta dicts
+    processed_algo_runs_map: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
 
-    # --- Data Preparation ---
-    col_labels = ["Dataset", "Nodes", "Edges", "Algorithm", "Time", "Memory", "# Comms", 
-                  "Modularity", "Conductance", "Int. Density", "ARI", "NMI", "V-Measure"]
-    cell_text = []
-    row_colors = []
-    base_color = "#FFFFFF" # White
-    alt_color = "#F0F0F0"  # Light grey
-    highlight_color = "#FFFACD" # Lemon chiffon for best value
+    for dataset_res_item_mpl in benchmark_results_valid:
+        dataset_name_mpl: str = dataset_res_item_mpl["dataset"]
+        for algo_meta_mpl in ALGORITHMS_METADATA:
+            algo_prefix_key_mpl: str = algo_meta_mpl["prefix"]
+            elapsed_key_check: str = f"{algo_prefix_key_mpl}_elapsed"
+            # Check if any key for this algo exists (not just _elapsed which might be missing if only info keys are present)
+            if any(k.startswith(algo_prefix_key_mpl) for k in dataset_res_item_mpl.keys()):
+                # Check if it was at least initialized (elapsed time might be 0 or positive, or -1 for skipped)
+                if (
+                    dataset_res_item_mpl.get(elapsed_key_check, -2) != -2
+                ):  # -2 is our default for "not even in results"
+                    processed_algo_runs_map[dataset_name_mpl].append(algo_meta_mpl)
 
-    # --- Helper function to format values and get highlight info ---
-    def fmt(key, decimals=3, lower_is_better=False, is_time=False, is_memory=False):
-        nx_val = result.get(f"nx_{key}", float("nan"))
-        rx_l_val = result.get(f"rx_louvain_{key}", float("nan"))
-        rx_p_val = result.get(f"rx_leiden_{key}", float("nan")) # Changed CPM to Leiden
-        
-        values = [nx_val, rx_l_val, rx_p_val]
-        best_idx = get_best_idx(values, lower_is_better) # Use the same helper as markdown table
-        
-        formatted_values = []
-        highlight_flags = []
-        for i, v in enumerate(values):
-            is_best = (i == best_idx)
-            if isinstance(v, float) and np.isnan(v):
-                formatted_values.append("-")
-            elif is_time:
-                formatted_values.append(format_time(v))
-            elif is_memory:
-                 formatted_values.append(format_memory(v))
-            elif isinstance(v, int):
-                 formatted_values.append(f"{v}")
-            else:
-                formatted_values.append(f"{v:.{decimals}f}")
-            highlight_flags.append(is_best)
-        return formatted_values, highlight_flags
+    if not any(processed_algo_runs_map.values()):
+        logger.warning("No algorithm data found across any datasets for Matplotlib table.")
+        return
 
-    # Define get_best_idx locally for matplotlib table generation
-    def get_best_idx(values, lower_is_better=False):
-        valid_values = [(i, v) for i, v in enumerate(values) if not (isinstance(v, float) and np.isnan(v))]
-        if not valid_values:
-            return -1
-        if lower_is_better:
-            best_idx, _ = min(valid_values, key=lambda item: item[1])
-        else:
-            best_idx, _ = max(valid_values, key=lambda item: item[1])
-        return best_idx
+    for dataset_res_item_mpl in benchmark_results_valid:
+        dataset_name_mpl: str = dataset_res_item_mpl["dataset"]
+        current_dataset_algo_metas: list[dict[str, Any]] = processed_algo_runs_map[dataset_name_mpl]
+        if not current_dataset_algo_metas:
+            continue
 
-    # --- Populate cell text and colors ---
-    row_idx = 0
-    for result in results:
-        dataset_name = result["dataset"]
-        nodes = result["nodes"]
-        edges = result["edges"]
-        
-        # Format metrics for the three algorithms
-        time_fmt, time_hl = fmt("elapsed", is_time=True, lower_is_better=True)
-        mem_fmt, mem_hl = fmt("memory", is_memory=True, lower_is_better=True)
-        comms_fmt, comms_hl = fmt("num_comms", decimals=0)
-        mod_fmt, mod_hl = fmt("modularity")
-        cond_fmt, cond_hl = fmt("conductance", lower_is_better=True)
-        dens_fmt, dens_hl = fmt("internal_density")
-        ari_fmt, ari_hl = fmt("ari")
-        nmi_fmt, nmi_hl = fmt("nmi")
-        vm_fmt, vm_hl = fmt("v_measure")
+        for algo_meta_mpl in current_dataset_algo_metas:
+            algo_prefix_key_mpl: str = algo_meta_mpl["prefix"]
+            algo_name_display_mpl: str = algo_meta_mpl["name"]
+            current_row_text_cells: list[str] = []
 
-        # Combine formatted strings and highlight flags for each row
-        nx_row = [dataset_name, nodes, edges, "NX Louvain"] + [time_fmt[0], mem_fmt[0], comms_fmt[0], mod_fmt[0], cond_fmt[0], dens_fmt[0], ari_fmt[0], nmi_fmt[0], vm_fmt[0]]
-        rx_l_row = ["", "", "", "RX Louvain"] + [time_fmt[1], mem_fmt[1], comms_fmt[1], mod_fmt[1], cond_fmt[1], dens_fmt[1], ari_fmt[1], nmi_fmt[1], vm_fmt[1]]
-        rx_p_row = ["", "", "", "RX Leiden"] + [time_fmt[2], mem_fmt[2], comms_fmt[2], mod_fmt[2], cond_fmt[2], dens_fmt[2], ari_fmt[2], nmi_fmt[2], vm_fmt[2]] # Changed CPM to Leiden
-        
-        nx_hl_flags = [False]*4 + [time_hl[0], mem_hl[0], comms_hl[0], mod_hl[0], cond_hl[0], dens_hl[0], ari_hl[0], nmi_hl[0], vm_hl[0]]
-        rx_l_hl_flags = [False]*4 + [time_hl[1], mem_hl[1], comms_hl[1], mod_hl[1], cond_hl[1], dens_hl[1], ari_hl[1], nmi_hl[1], vm_hl[1]]
-        rx_p_hl_flags = [False]*4 + [time_hl[2], mem_hl[2], comms_hl[2], mod_hl[2], cond_hl[2], dens_hl[2], ari_hl[2], nmi_hl[2], vm_hl[2]] # Changed CPM to Leiden
-        
-        cell_text.extend([nx_row, rx_l_row, rx_p_row])
-        row_idx += 3
-        
-    # Correct way to set cell colors based on highlight flags
-    cell_colours = []
-    for i, result in enumerate(results):
-        time_fmt, time_hl = fmt("elapsed", is_time=True, lower_is_better=True)
-        mem_fmt, mem_hl = fmt("memory", is_memory=True, lower_is_better=True)
-        comms_fmt, comms_hl = fmt("num_comms", decimals=0)
-        mod_fmt, mod_hl = fmt("modularity")
-        cond_fmt, cond_hl = fmt("conductance", lower_is_better=True)
-        dens_fmt, dens_hl = fmt("internal_density")
-        ari_fmt, ari_hl = fmt("ari")
-        nmi_fmt, nmi_hl = fmt("nmi")
-        vm_fmt, vm_hl = fmt("v_measure")
-        
-        nx_hl_flags = [False]*4 + [time_hl[0], mem_hl[0], comms_hl[0], mod_hl[0], cond_hl[0], dens_hl[0], ari_hl[0], nmi_hl[0], vm_hl[0]]
-        rx_l_hl_flags = [False]*4 + [time_hl[1], mem_hl[1], comms_hl[1], mod_hl[1], cond_hl[1], dens_hl[1], ari_hl[1], nmi_hl[1], vm_hl[1]]
-        rx_p_hl_flags = [False]*4 + [time_hl[2], mem_hl[2], comms_hl[2], mod_hl[2], cond_hl[2], dens_hl[2], ari_hl[2], nmi_hl[2], vm_hl[2]]
-        
-        row_base = base_color if (i % 2 == 0) else alt_color
-        row_alt = alt_color if (i % 2 == 0) else base_color
-        
-        cell_colours.append([row_base if not hl else highlight_color for hl in nx_hl_flags])
-        cell_colours.append([row_alt if not hl else highlight_color for hl in rx_l_hl_flags])
-        cell_colours.append([row_base if not hl else highlight_color for hl in rx_p_hl_flags])
-        
-    # --- Create Table --- 
-    fig, ax = plt.subplots(figsize=(20, max(8, len(cell_text) * 0.4))) 
-    ax.axis("tight")
-    ax.axis("off")
-    the_table = ax.table(cellText=cell_text, colLabels=col_labels, loc="center", cellColours=cell_colours)
-    the_table.auto_set_font_size(False)
-    the_table.set_fontsize(9)
-    the_table.scale(1.2, 1.2)
+            elapsed_key_for_run: str = f"{algo_prefix_key_mpl}_elapsed"
+            # Robustly get elapsed value, checking both direct _elapsed and suffixed key
+            raw_elapsed_val_for_run: Any = dataset_res_item_mpl.get(
+                elapsed_key_for_run,
+                dataset_res_item_mpl.get(
+                    f"{algo_prefix_key_mpl}{METRIC_KEY_TO_PROPERTIES['_elapsed']['key']}"
+                ),
+            )
+            is_skipped_entire_algo_run: bool = raw_elapsed_val_for_run == -1
 
-    # Style header
-    for (i, j), cell in the_table.get_celld().items():
-        if i == 0:
-            cell.set_text_props(weight="bold", color="white")
-            cell.set_facecolor("#444444")
-        # Span dataset name over 3 rows
-        if j == 0 and i > 0 and i % 3 == 1:
-            # cell._loc = 'center' # Center text vertically
-            cell.set_text_props(va="center") # Use vertical alignment property
-        elif j == 0 and i > 0 and (i % 3 == 2 or i % 3 == 0):
-             # cell.visible = False
-             cell.set_visible(False)
-             
-    # Merge cells for Dataset name
-    # Note: This requires careful indexing based on the 3 rows per dataset
-    for i in range(0, len(cell_text), 3):
-        # Merge Dataset cell
-        if i + 2 < len(cell_text):
-             # the_table[(i+1, 0)]._visible = True
-             # the_table[(i+2, 0)]._visible = False
-             # the_table[(i+3, 0)]._visible = False
-             the_table[(i+1, 0)].set_visible(True)
-             the_table[(i+2, 0)].set_visible(False)
-             the_table[(i+3, 0)].set_visible(False)
-             # the_table[(i+1, 0)]._text = cell_text[i][0]
-             the_table[(i+1, 0)].get_text().set_text(cell_text[i][0])
-             the_table[(i+1, 0)].set_height(3 * the_table[(i+1, 0)].get_height())
-             # Merge Nodes cell
-             # the_table[(i+1, 1)]._visible = True
-             # the_table[(i+2, 1)]._visible = False
-             # the_table[(i+3, 1)]._visible = False
-             the_table[(i+1, 1)].set_visible(True)
-             the_table[(i+2, 1)].set_visible(False)
-             the_table[(i+3, 1)].set_visible(False)
-             # the_table[(i+1, 1)]._text = str(cell_text[i][1])
-             the_table[(i+1, 1)].get_text().set_text(str(cell_text[i][1]))
-             the_table[(i+1, 1)].set_height(3 * the_table[(i+1, 1)].get_height())
-             # Merge Edges cell
-             # the_table[(i+1, 2)]._visible = True
-             # the_table[(i+2, 2)]._visible = False
-             # the_table[(i+3, 2)]._visible = False
-             the_table[(i+1, 2)].set_visible(True)
-             the_table[(i+2, 2)].set_visible(False)
-             the_table[(i+3, 2)].set_visible(False)
-             # the_table[(i+1, 2)]._text = str(cell_text[i][2])
-             the_table[(i+1, 2)].get_text().set_text(str(cell_text[i][2]))
-             the_table[(i+1, 2)].set_height(3 * the_table[(i+1, 2)].get_height())
+            for metric_prop_col_mpl in ORDERED_METRIC_PROPERTIES:
+                col_key_suffix_mpl: str = metric_prop_col_mpl["key"]
+                text_for_cell: str = "N/A"
+                is_cell_na: bool = True  # Assume NA unless a value is found
+                is_cell_skipped: bool = False
 
-    # --- Save Figure ---
-    plt.title("Community Detection Benchmark Results", fontsize=16, fontweight="bold")
+                if metric_prop_col_mpl["type"] == "info":
+                    text_for_cell = (
+                        algo_name_display_mpl
+                        if col_key_suffix_mpl == "algorithm_name"
+                        else str(dataset_res_item_mpl.get(col_key_suffix_mpl, "N/A"))
+                    )
+                    is_cell_na = text_for_cell == "N/A"
+                else:
+                    full_metric_data_key: str = f"{algo_prefix_key_mpl}{col_key_suffix_mpl}"
+                    raw_metric_val_for_cell: Any = dataset_res_item_mpl.get(full_metric_data_key)
+
+                    if is_skipped_entire_algo_run and col_key_suffix_mpl not in ["_elapsed", "_memory"]:
+                        text_for_cell = "SKIPPED"
+                        is_cell_skipped = True
+                    elif raw_metric_val_for_cell is not None:
+                        if (
+                            isinstance(raw_metric_val_for_cell, str)
+                            and raw_metric_val_for_cell == "SKIPPED"
+                        ):
+                            text_for_cell = "SKIPPED"
+                            is_cell_skipped = True
+                        elif isinstance(raw_metric_val_for_cell, float | int) and np.isnan(
+                            float(raw_metric_val_for_cell)
+                        ):
+                            text_for_cell = "N/A"  # Already NA
+                        elif (
+                            col_key_suffix_mpl == "_elapsed" and raw_elapsed_val_for_run == -1
+                        ):  # Check the run's overall skip status
+                            text_for_cell = "SKIPPED"
+                            is_cell_skipped = True
+                        else:
+                            is_cell_na = False  # Has a valid value
+                            formatter_name_mpl: str | None = metric_prop_col_mpl.get("format_func")
+                            actual_formatter_mpl: Callable[[Any], str] | None = (
+                                FORMATTER_FUNCTIONS.get(formatter_name_mpl)
+                                if isinstance(formatter_name_mpl, str)
+                                else None
+                            )
+
+                            raw_value_for_color_storage: float | None = None
+                            try:  # Attempt to convert to float for storage and formatting
+                                raw_value_for_color_storage = float(raw_metric_val_for_cell)
+                            except (ValueError, TypeError):  # If not float, use string representation
+                                text_for_cell = str(raw_metric_val_for_cell)
+
+                            if raw_value_for_color_storage is not None:  # If it was float-convertible
+                                if actual_formatter_mpl:
+                                    text_for_cell = actual_formatter_mpl(raw_value_for_color_storage)
+                                else:  # Default float formatting
+                                    if abs(raw_value_for_color_storage) > 1e4 or (
+                                        abs(raw_value_for_color_storage) < 0.001
+                                        and raw_value_for_color_storage != 0
+                                    ):
+                                        text_for_cell = f"{raw_value_for_color_storage:.2e}"
+                                    else:
+                                        text_for_cell = f"{raw_value_for_color_storage:.3f}"
+                                # Store raw float value for color normalization
+                                if (
+                                    not is_cell_skipped
+                                    and metric_prop_col_mpl.get("higher_is_better") is not None
+                                ):
+                                    raw_cell_values_for_color[col_key_suffix_mpl][
+                                        dataset_name_mpl
+                                    ].append(raw_value_for_color_storage)
+                            # If raw_value_for_color_storage was None (conversion failed), text_for_cell is already str(raw_metric_val_for_cell)
+                    # else raw_metric_val_for_cell is None, so text_for_cell remains "N/A"
+                current_row_text_cells.append(text_for_cell)
+            table_cell_text_data.append(current_row_text_cells)
+
+    if not table_cell_text_data:
+        logger.warning("No data rows to build Matplotlib table after processing.")
+        return
+
+    metric_dataset_norms: defaultdict[str, dict[str, float | None]] = defaultdict(
+        lambda: {"min": None, "max": None}
+    )
+    for metric_key_norm, datasets_data_norm in raw_cell_values_for_color.items():
+        for dataset_name_norm, values_list_norm in datasets_data_norm.items():
+            if values_list_norm:  # Ensure list is not empty
+                metric_dataset_norms[metric_key_norm + "@" + dataset_name_norm]["min"] = min(
+                    values_list_norm
+                )
+                metric_dataset_norms[metric_key_norm + "@" + dataset_name_norm]["max"] = max(
+                    values_list_norm
+                )
+
+    best_value_flags: defaultdict[int, defaultdict[int, bool]] = defaultdict(
+        lambda: defaultdict(lambda: False)
+    )
+    data_grouped_by_dataset_then_algo: defaultdict[str, list[list[str]]] = defaultdict(list)
+    for original_row_idx, row_content in enumerate(table_cell_text_data):
+        # Assuming "dataset" is always the first info column by convention from ORDERED_METRIC_PROPERTIES
+        ds_name_group: str = row_content[TABLE_COLUMN_KEYS.index("dataset")]
+        data_grouped_by_dataset_then_algo[ds_name_group].append(row_content)
+
+    for dataset_name_group_best, algo_rows_in_ds_best in data_grouped_by_dataset_then_algo.items():
+        for col_idx_best, col_metric_key_suffix_best in enumerate(TABLE_COLUMN_KEYS):
+            metric_prop_for_best_val: MetricProperty | None = METRIC_KEY_TO_PROPERTIES.get(
+                col_metric_key_suffix_best
+            )
+            if (
+                not metric_prop_for_best_val
+                or metric_prop_for_best_val["type"] == "info"
+                or metric_prop_for_best_val.get("higher_is_better") is None
+            ):
+                continue
+
+            values_for_this_metric_in_ds_raw: list[float] = []
+            original_row_indices_in_ds: list[int] = []
+
+            for row_data_item_best in algo_rows_in_ds_best:
+                # Find original index of this row in table_cell_text_data
+                # This is tricky if rows are not unique; assume they are for now by (dataset, algo_name) pair logic
+                # A more robust way would be to pass original_row_idx along with row_data_item_best
+                original_row_idx_lookup: int = -1
+                for i_lookup, r_lookup in enumerate(table_cell_text_data):
+                    if r_lookup == row_data_item_best:  # Simplistic match
+                        original_row_idx_lookup = i_lookup
+                        break
+                if original_row_idx_lookup == -1:
+                    continue  # Should not happen
+
+                cell_text_val_best: str = row_data_item_best[col_idx_best]
+                if cell_text_val_best not in ["N/A", "SKIPPED"]:
+                    algo_name_of_row_best: str = row_data_item_best[
+                        TABLE_COLUMN_KEYS.index("algorithm_name")
+                    ]
+                    algo_meta_of_row_best: dict[str, Any] | None = next(
+                        (am for am in ALGORITHMS_METADATA if am["name"] == algo_name_of_row_best), None
+                    )
+                    original_ds_res_best: BenchmarkResultItem | None = next(
+                        (
+                            dsr
+                            for dsr in benchmark_results_valid
+                            if dsr["dataset"] == dataset_name_group_best
+                        ),
+                        None,
+                    )
+
+                    if algo_meta_of_row_best and original_ds_res_best:
+                        raw_val_for_comp_best: Any = original_ds_res_best.get(
+                            f"{algo_meta_of_row_best['prefix']}{col_metric_key_suffix_best}"
+                        )
+                        if raw_val_for_comp_best is not None and not (
+                            isinstance(raw_val_for_comp_best, float) and np.isnan(raw_val_for_comp_best)
+                        ):
+                            try:
+                                values_for_this_metric_in_ds_raw.append(float(raw_val_for_comp_best))
+                                original_row_indices_in_ds.append(original_row_idx_lookup)
+                            except (ValueError, TypeError):
+                                pass
+
+            if not values_for_this_metric_in_ds_raw:
+                continue
+
+            best_raw_val_found: float = (
+                max(values_for_this_metric_in_ds_raw)
+                if metric_prop_for_best_val["higher_is_better"]
+                else min(values_for_this_metric_in_ds_raw)
+            )
+
+            for i_raw, raw_v_comp in enumerate(values_for_this_metric_in_ds_raw):
+                if abs(raw_v_comp - best_raw_val_found) < 1e-9:  # Tolerance for float comparison
+                    original_row_idx_of_best_val: int = original_row_indices_in_ds[i_raw]
+                    best_value_flags[original_row_idx_of_best_val][col_idx_best] = True
+
+    num_actual_rows_plot: int = len(table_cell_text_data)
+    num_actual_cols_plot: int = len(TABLE_COLUMN_NAMES)
+
+    base_col_width_plot: float = 0.04
+    col_widths_plot: list[float] = [base_col_width_plot] * num_actual_cols_plot
+    for c_idx_w_plot, key_w_plot in enumerate(TABLE_COLUMN_KEYS):
+        key_type = METRIC_KEY_TO_PROPERTIES[key_w_plot]["type"]
+        if key_w_plot == "dataset":
+            col_widths_plot[c_idx_w_plot] = 0.10
+        elif key_w_plot == "algorithm_name":
+            col_widths_plot[c_idx_w_plot] = 0.12
+        elif key_type == "info":
+            col_widths_plot[c_idx_w_plot] = 0.05
+
+    fig_width_final: float = sum(col_widths_plot) * 25
+    fig_height_final: float = max(5.0, min((num_actual_rows_plot + 1) * 0.35, 50.0))
+    fig_width_final = max(10.0, min(fig_width_final, 60.0))
+
+    fig_table: plt.Figure
+    ax_table_plot: plt.Axes
+    fig_table, ax_table_plot = plt.subplots(figsize=(fig_width_final, fig_height_final), dpi=220)
+    ax_table_plot.axis("tight")
+    ax_table_plot.axis("off")
+
+    mpl_table_obj: plt.Table = ax_table_plot.table(
+        cellText=table_cell_text_data,
+        colLabels=TABLE_COLUMN_NAMES,
+        colWidths=col_widths_plot,
+        loc="center",
+        cellLoc="center",
+    )
+    mpl_table_obj.auto_set_font_size(False)
+    mpl_table_obj.set_fontsize(6)
+
+    for r_style in range(num_actual_rows_plot):
+        dataset_name_for_row_color_style: str = table_cell_text_data[r_style][
+            TABLE_COLUMN_KEYS.index("dataset")
+        ]
+        algo_name_for_row_color_style: str = table_cell_text_data[r_style][
+            TABLE_COLUMN_KEYS.index("algorithm_name")
+        ]
+        algo_meta_for_row_color_style: dict[str, Any] | None = next(
+            (am for am in ALGORITHMS_METADATA if am["name"] == algo_name_for_row_color_style), None
+        )
+        is_run_overall_skipped_style: bool = False
+        original_ds_res_color_style: BenchmarkResultItem | None = None
+
+        if algo_meta_for_row_color_style:
+            original_ds_res_color_style = next(
+                (
+                    dsr
+                    for dsr in benchmark_results_valid
+                    if dsr["dataset"] == dataset_name_for_row_color_style
+                ),
+                None,
+            )
+            if original_ds_res_color_style:
+                elapsed_val_color_check_style: Any = original_ds_res_color_style.get(
+                    f"{algo_meta_for_row_color_style['prefix']}_elapsed"
+                )
+                is_run_overall_skipped_style = elapsed_val_color_check_style == -1
+
+        for c_style in range(num_actual_cols_plot):
+            cell_obj_to_style: plt.Cell = mpl_table_obj[r_style + 1, c_style]
+            metric_prop_for_style: MetricProperty = METRIC_KEY_TO_PROPERTIES[TABLE_COLUMN_KEYS[c_style]]
+            cell_text_for_style: str = table_cell_text_data[r_style][c_style]
+            raw_value_for_cell_style: Any = None
+
+            if (
+                metric_prop_for_style["type"] != "info"
+                and algo_meta_for_row_color_style
+                and original_ds_res_color_style
+            ):
+                raw_value_for_cell_style = original_ds_res_color_style.get(
+                    f"{algo_meta_for_row_color_style['prefix']}{metric_prop_for_style['key']}"
+                )
+
+            is_na_cell_style: bool = cell_text_for_style == "N/A"
+            is_skipped_cell_style: bool = cell_text_for_style == "SKIPPED" or (
+                is_run_overall_skipped_style
+                and metric_prop_for_style["type"] != "info"
+                and metric_prop_for_style["key"] not in ["_elapsed", "_memory"]
+            )
+
+            if metric_prop_for_style["type"] != "info":
+                norm_key_style: str = (
+                    metric_prop_for_style["key"] + "@" + dataset_name_for_row_color_style
+                )
+                min_val_norm_style: float | None = metric_dataset_norms.get(norm_key_style, {}).get(
+                    "min"
+                )
+                max_val_norm_style: float | None = metric_dataset_norms.get(norm_key_style, {}).get(
+                    "max"
+                )
+                face_color_cell: str = get_color_for_cell_mpl(
+                    raw_value_for_cell_style,
+                    metric_prop_for_style,
+                    min_val_norm_style,
+                    max_val_norm_style,
+                    is_skipped_cell_style,
+                    is_na_cell_style,
+                )
+                cell_obj_to_style.set_facecolor(face_color_cell)
+
+            if best_value_flags[r_style][c_style]:
+                cell_obj_to_style.get_text().set_weight("bold")
+                cell_obj_to_style.get_text().set_color("black")
+
+    for c_header_style in range(num_actual_cols_plot):
+        header_cell_style: plt.Cell = mpl_table_obj[0, c_header_style]
+        header_cell_style.get_text().set_weight("bold")
+        header_cell_style.set_facecolor("#E0E0E0")
+        header_cell_style.get_text().set_fontsize(7)
+
+    fig_table.suptitle("Community Detection Benchmark Results", fontsize=18, fontweight="bold", y=0.995)
+    plt.tight_layout(pad=0.8)  # Увеличим pad с 0.5 до 0.8
     try:
-        plt.savefig(output_file, bbox_inches="tight", dpi=300)
-        print(f"Results table image saved successfully to {output_file}")
-    except Exception as e:
-        print(f"Error saving results table image: {e}")
-        plt.close(fig) 
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_file)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            logger.info(f"Created directory for Matplotlib table: {output_dir}")
+
+        plt.savefig(output_file, bbox_inches="tight", pad_inches=0.3)  # Увеличим pad_inches с 0.2 до 0.3
+        logger.info(f"Matplotlib table saved successfully to {output_file}")
+    except Exception as e_save_mpl:
+        logger.error(f"Error saving Matplotlib table to {output_file}: {e_save_mpl}", exc_info=True)
+    finally:  # Always close the figure
+        plt.close(fig_table)
+
+
+def plot_gcr_pcp_vs_jaccard_threshold(
+    benchmark_results: BenchmarkResultsList, output_folder: str
+) -> None:
+    """Plots GCR and PCP vs. Jaccard Threshold for each dataset and algorithm.
+
+    Generates a separate plot for each dataset, showing how GCR and PCP
+    metrics change as the Jaccard similarity threshold for matching
+    clusters varies.
+
+    Args:
+        benchmark_results: A list of benchmark result items.
+        output_folder: The directory to save the generated plot images.
+    """
+    benchmark_results_valid: BenchmarkResultsList = get_valid_benchmark_results(benchmark_results)
+    if not benchmark_results_valid:
+        logger.warning("No valid benchmark results for GCR/PCP plot after filtering.")
+        return
+
+    active_algorithms_for_plot: list[dict[str, Any]] = []
+    if benchmark_results_valid:
+        # Check against the first valid dataset to see which algos have GCR/PCP keys
+        # This assumes that if an algo has GCR/PCP keys, it has them for all its runs.
+        first_ds_res_check: BenchmarkResultItem = benchmark_results_valid[0]
+        for algo_meta_item_gcr_check in ALGORITHMS_METADATA:
+            algo_prefix_gcr_check_str: str = algo_meta_item_gcr_check["prefix"]
+            # Check if at least one GCR key for any Jaccard threshold exists for this algo prefix
+            has_gcr_data_flag: bool = any(
+                f"{algo_prefix_gcr_check_str}_gcr_jt{str(jt_val).replace('.', 'p')}"
+                in first_ds_res_check
+                for jt_val in JACCARD_THRESHOLDS_TO_TEST
+            )
+            if has_gcr_data_flag:
+                active_algorithms_for_plot.append(algo_meta_item_gcr_check)
+
+    if not active_algorithms_for_plot:
+        logger.warning("No algorithms found with GCR/PCP data structures for plotting.")
+        return
+
+    num_active_algos_plot: int = len(active_algorithms_for_plot)
+    # No need to check num_active_algos_plot == 0, caught by above.
+
+    # Ensure output directory exists
+    if not os.path.exists(output_folder):
+        try:
+            os.makedirs(output_folder)
+            logger.info(f"Created output directory for GCR/PCP plots: {output_folder}")
+        except OSError as e_mkdir:
+            logger.error(
+                f"Could not create output directory {output_folder}: {e_mkdir}. Plots will not be saved."
+            )
+            return
+
+    for ds_res_item_gcr_pcp_plot in benchmark_results_valid:
+        dataset_name_for_plot: str = ds_res_item_gcr_pcp_plot["dataset"]
+
+        fig_gcr_pcp: plt.Figure
+        ax_gcr_plot: plt.Axes
+        ax_pcp_plot: plt.Axes
+        fig_gcr_pcp, (ax_gcr_plot, ax_pcp_plot) = plt.subplots(2, 1, figsize=(14, 12), dpi=150)
+        plt.subplots_adjust(hspace=0.45)
+        fig_gcr_pcp.suptitle(
+            f"GCR & PCP vs. Jaccard Threshold for {dataset_name_for_plot}",
+            fontsize=16,
+            fontweight="bold",
+        )
+
+        x_jaccard_thresholds_plot: list[float] = JACCARD_THRESHOLDS_TO_TEST
+
+        for algo_meta_plot_current in active_algorithms_for_plot:
+            algo_prefix_for_data_plot: str = algo_meta_plot_current["prefix"]
+            algo_display_name_for_plot: str = algo_meta_plot_current["name"]
+            algo_plot_color_val: str = algo_meta_plot_current["color"]
+
+            gcr_values_to_plot_list: list[float | np.nan] = []  # Use np.nan for missing data
+            pcp_values_to_plot_list: list[float | np.nan] = []
+
+            elapsed_key_gcr_skip_check_plot: str = f"{algo_prefix_for_data_plot}_elapsed"
+            if ds_res_item_gcr_pcp_plot.get(elapsed_key_gcr_skip_check_plot) == -1:
+                continue
+
+            for jt_threshold_val_plot in x_jaccard_thresholds_plot:
+                jt_key_str_plot: str = str(jt_threshold_val_plot).replace(".", "p")
+                gcr_data_key_plot: str = f"{algo_prefix_for_data_plot}_gcr_jt{jt_key_str_plot}"
+                pcp_data_key_plot: str = f"{algo_prefix_for_data_plot}_pcp_jt{jt_key_str_plot}"
+
+                gcr_val: Any = ds_res_item_gcr_pcp_plot.get(gcr_data_key_plot)
+                pcp_val: Any = ds_res_item_gcr_pcp_plot.get(pcp_data_key_plot)
+
+                gcr_values_to_plot_list.append(float(gcr_val) if gcr_val is not None else np.nan)
+                pcp_values_to_plot_list.append(float(pcp_val) if pcp_val is not None else np.nan)
+
+            if not all(np.isnan(gcr_values_to_plot_list)):
+                ax_gcr_plot.plot(
+                    x_jaccard_thresholds_plot,
+                    gcr_values_to_plot_list,
+                    marker="o",
+                    linestyle="-",
+                    color=algo_plot_color_val,
+                    label=algo_display_name_for_plot,
+                )
+            if not all(np.isnan(pcp_values_to_plot_list)):
+                ax_pcp_plot.plot(
+                    x_jaccard_thresholds_plot,
+                    pcp_values_to_plot_list,
+                    marker="x",
+                    linestyle="--",
+                    color=algo_plot_color_val,
+                    label=algo_display_name_for_plot,
+                )
+
+        axes_to_style: list[tuple[plt.Axes, str]] = [
+            (ax_gcr_plot, "Ground Truth Recall (GCR)"),
+            (ax_pcp_plot, "Predicted Cluster Precision (PCP)"),
+        ]
+        for ax_curr_style, title_part_style in axes_to_style:
+            ax_curr_style.set_xlabel("Jaccard Threshold", fontsize=10)
+            ax_curr_style.set_ylabel(title_part_style.split(" (")[0], fontsize=10)
+            ax_curr_style.set_title(f"{title_part_style} vs. Jaccard Threshold", fontsize=12)
+            ax_curr_style.set_xticks(x_jaccard_thresholds_plot)
+            ax_curr_style.set_ylim(-0.05, 1.05)
+            ax_curr_style.grid(True, linestyle="--", alpha=0.7)
+            num_legend_cols_gcr_pcp_plot: int = max(
+                1, num_active_algos_plot // 4 if num_active_algos_plot > 3 else 1
+            )
+            ax_curr_style.legend(loc="best", fontsize=7, ncol=num_legend_cols_gcr_pcp_plot)
+
+        safe_dataset_name_for_file_plot: str = (
+            dataset_name_for_plot.replace(" ", "_").replace("/", "_").replace(":", "_").replace(".", "_")
+        )  # Added dot replacement
+        final_plot_filename_path: str = os.path.join(
+            output_folder, f"{safe_dataset_name_for_file_plot}_gcr_pcp_plot.png"
+        )
+        try:
+            plt.savefig(final_plot_filename_path, bbox_inches="tight")
+            logger.info(f"GCR/PCP plot for {dataset_name_for_plot} saved to {final_plot_filename_path}")
+        except Exception as e_save_gcr_pcp_plot:
+            logger.error(
+                f"Error saving GCR/PCP plot for {dataset_name_for_plot} to {final_plot_filename_path}: {e_save_gcr_pcp_plot}",
+                exc_info=True,
+            )
+        finally:  # Always close the figure
+            plt.close(fig_gcr_pcp)

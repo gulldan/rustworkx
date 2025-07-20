@@ -27,8 +27,13 @@ classifiers = [
 keywords = ["Networks", "network", "graph", "Graph Theory", "DAG"]
 
 dynamic = ["version"]
+dependencies = [
+    "polars>=1.31.0",
+    "pyarrow>=20.0.0",
+    "python-igraph>=0.11.9",
+]
 
-[dependency-group]
+[dependency-groups]
 dev = [
   "ruff>=0.11.0",
   "cdlib>=0.4.0",
@@ -72,6 +77,7 @@ lint.select = [
     "PYI", # flake8-pyi
     "Q",   # flake8-quotes
 ]
+lint.ignore = ["E501"]
 target-version = "py311"
 extend-exclude = ["doc"]
 
@@ -114,4 +120,11 @@ repair-wheel-command = "brew install pipx && pipx ensurepath && pipx run --spec 
 repair-wheel-command = "cp {wheel} {dest_dir}/. && pipx run abi3audit==0.0.9 --strict --report {wheel}"
 
 [tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "function"
+minversion = "6.0"
+addopts = "-ra -q --durations=10"
+testpaths = [
+    "tests",
+]
+
+[tool.coverage.run]
+source = ["rustworkx"]

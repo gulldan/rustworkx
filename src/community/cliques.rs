@@ -11,7 +11,7 @@
 // limitations under the License.
 // Bron, C.; Kerbosch, J. (1973). "Algorithm 457: finding all cliques of an undirected graph". Communications of the ACM. 16 (9): 575–577. doi:10.1145/362342.362367.
 
-use ahash::{AHashMap, AHashSet};
+use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
 use petgraph::graph::NodeIndex;
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -38,7 +38,7 @@ const MAX_NODES_FOR_BITSET: usize = 64;
 /// Returns:
 ///     A list of cliques, where each clique is represented as a list of nodes.
 #[pyfunction]
-#[pyo3(text_signature = "(graph, /)")]
+#[pyo3(signature = (graph, /), text_signature = "(graph, /)")]
 pub fn find_maximal_cliques(py: Python, graph: PyObject) -> PyResult<Vec<Vec<usize>>> {
     let graph_ref = match graph.extract::<PyRef<PyGraph>>(py) {
         Ok(graph) => graph,
@@ -59,9 +59,9 @@ pub fn find_maximal_cliques(py: Python, graph: PyObject) -> PyResult<Vec<Vec<usi
     // Dispatch based on graph size
     if node_count <= MAX_NODES_FOR_BITSET {
         // --- Use Bitset Implementation ---
-        let mut node_map_fwd: AHashMap<NodeIndex, u32> = AHashMap::with_capacity(node_count);
+        let mut node_map_fwd: HashMap<NodeIndex, u32> = HashMap::with_capacity(node_count);
         let mut node_map_rev_bitset: Vec<NodeIndex> = Vec::with_capacity(node_count);
-        let mut adj: AHashMap<u32, u64> = AHashMap::with_capacity(node_count);
+        let mut adj: HashMap<u32, u64> = HashMap::with_capacity(node_count);
         let mut max_node_id = 0;
         for (i, node_idx) in graph_ref.graph.node_indices().enumerate() {
             if i >= MAX_NODES_FOR_BITSET {
@@ -101,15 +101,15 @@ pub fn find_maximal_cliques(py: Python, graph: PyObject) -> PyResult<Vec<Vec<usi
         node_map_rev = node_map_rev_bitset;
     } else {
         // --- Use HashSet Implementation ---
-        let mut node_map_fwd: AHashMap<NodeIndex, u32> = AHashMap::with_capacity(node_count);
+        let mut node_map_fwd: HashMap<NodeIndex, u32> = HashMap::with_capacity(node_count);
         let mut node_map_rev_hashset: Vec<NodeIndex> = Vec::with_capacity(node_count);
-        let mut adj: AHashMap<u32, AHashSet<u32>> = AHashMap::with_capacity(node_count);
+        let mut adj: HashMap<u32, HashSet<u32>> = HashMap::with_capacity(node_count);
         let mut max_node_id = 0;
         for (i, node_idx) in graph_ref.graph.node_indices().enumerate() {
             let node_u32 = i as u32;
             node_map_fwd.insert(node_idx, node_u32);
             node_map_rev_hashset.push(node_idx);
-            adj.insert(node_u32, AHashSet::new());
+            adj.insert(node_u32, HashSet::new());
             max_node_id = max_node_id.max(node_u32);
         }
         for edge in graph_ref.graph.edge_references() {
@@ -146,8 +146,8 @@ pub fn find_maximal_cliques(py: Python, graph: PyObject) -> PyResult<Vec<Vec<usi
 // --- Degeneracy Ordering Calculation (copied from cpm.rs) ---
 
 /// Calculates degeneracy ordering using bitset representation for neighbors.
-fn calculate_degeneracy_ordering_bitset(adj: &AHashMap<u32, u64>, num_nodes: usize) -> Vec<u32> {
-    let mut degrees: AHashMap<u32, usize> = AHashMap::with_capacity(num_nodes);
+fn calculate_degeneracy_ordering_bitset(adj: &HashMap<u32, u64>, num_nodes: usize) -> Vec<u32> {
+    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(num_nodes);
     let mut max_degree = 0;
     for node in 0..num_nodes as u32 {
         let degree = adj.get(&node).map_or(0, |mask| mask.count_ones() as usize);
@@ -205,12 +205,12 @@ fn calculate_degeneracy_ordering_bitset(adj: &AHashMap<u32, u64>, num_nodes: usi
 
 /// Calculates degeneracy ordering using HashSet representation for neighbors.
 fn calculate_degeneracy_ordering_hashset(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     num_nodes: usize,
 ) -> Vec<u32> {
-    let mut degrees: AHashMap<u32, usize> = AHashMap::with_capacity(num_nodes);
+    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(num_nodes);
     let mut max_degree = 0;
-    let mut all_nodes: AHashSet<u32> = (0..num_nodes as u32).collect();
+    let mut all_nodes: HashSet<u32> = (0..num_nodes as u32).collect();
     for (&node, neighbors) in adj {
         let degree = neighbors.len();
         degrees.insert(node, degree);
@@ -225,7 +225,7 @@ fn calculate_degeneracy_ordering_hashset(
         degree_bins[degree].push(node);
     }
     let mut order: Vec<u32> = Vec::with_capacity(num_nodes);
-    let mut processed: AHashSet<u32> = AHashSet::with_capacity(num_nodes);
+    let mut processed: HashSet<u32> = HashSet::with_capacity(num_nodes);
     let mut processed_count = 0;
 
     while processed_count < num_nodes {
@@ -269,12 +269,12 @@ fn calculate_degeneracy_ordering_hashset(
 
 /// Find maximal cliques using Bron-Kerbosch with degeneracy ordering and bitsets.
 fn find_maximal_cliques_degeneracy_bitset(
-    adj: &AHashMap<u32, u64>,
+    adj: &HashMap<u32, u64>,
     num_nodes: usize,
 ) -> Vec<Vec<u32>> {
     let mut cliques = Vec::new();
     let degeneracy_order = calculate_degeneracy_ordering_bitset(adj, num_nodes);
-    let node_pos: AHashMap<u32, usize> = degeneracy_order
+    let node_pos: HashMap<u32, usize> = degeneracy_order
         .iter()
         .enumerate()
         .map(|(i, &n)| (n, i))
@@ -313,7 +313,7 @@ fn find_maximal_cliques_degeneracy_bitset(
 
 /// Recursive part for maximal cliques using bitsets.
 fn bron_kerbosch_bitset_recursive(
-    adj: &AHashMap<u32, u64>,
+    adj: &HashMap<u32, u64>,
     cliques: &mut Vec<Vec<u32>>,
     potential_clique: &mut Vec<u32>,
     mut candidates_mask: u64,
@@ -353,24 +353,24 @@ fn bron_kerbosch_bitset_recursive(
 
 /// Find maximal cliques using Bron-Kerbosch with degeneracy ordering (HashSet version).
 fn find_maximal_cliques_degeneracy_hashset(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     num_nodes: usize,
 ) -> Vec<Vec<u32>> {
     let mut cliques = Vec::new();
     let degeneracy_order = calculate_degeneracy_ordering_hashset(adj, num_nodes);
-    let node_pos: AHashMap<u32, usize> = degeneracy_order
+    let node_pos: HashMap<u32, usize> = degeneracy_order
         .iter()
         .enumerate()
         .map(|(i, &n)| (n, i))
         .collect();
     let mut potential_clique: Vec<u32> = Vec::new();
-    let empty_neighbors = AHashSet::new();
+    let empty_neighbors = HashSet::new();
 
     for &v in &degeneracy_order {
         potential_clique.push(v);
         let neighbors_v = adj.get(&v).unwrap_or(&empty_neighbors);
-        let mut candidates: AHashSet<u32> = AHashSet::new();
-        let excluded: AHashSet<u32> = AHashSet::new();
+        let mut candidates: HashSet<u32> = HashSet::new();
+        let excluded: HashSet<u32> = HashSet::new();
         let v_pos = node_pos[&v];
         for &neighbor in neighbors_v {
             if let Some(&n_pos) = node_pos.get(&neighbor) {
@@ -394,11 +394,11 @@ fn find_maximal_cliques_degeneracy_hashset(
 
 /// Recursive part for maximal cliques using HashSets.
 fn bron_kerbosch_hashset_recursive(
-    adj: &AHashMap<u32, AHashSet<u32>>,
+    adj: &HashMap<u32, HashSet<u32>>,
     cliques: &mut Vec<Vec<u32>>,
     potential_clique: &mut Vec<u32>,
-    mut candidates: AHashSet<u32>,
-    mut excluded: AHashSet<u32>,
+    mut candidates: HashSet<u32>,
+    mut excluded: HashSet<u32>,
 ) {
     if candidates.is_empty() && excluded.is_empty() {
         cliques.push(potential_clique.clone());
@@ -408,7 +408,7 @@ fn bron_kerbosch_hashset_recursive(
     // TODO: Add pivot selection for further optimization
 
     let candidates_vec: Vec<u32> = candidates.iter().cloned().collect();
-    let empty_neighbors = AHashSet::new();
+    let empty_neighbors = HashSet::new();
 
     for v in candidates_vec {
         if !candidates.contains(&v) {

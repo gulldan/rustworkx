@@ -11,8 +11,7 @@
 // limitations under the License.
 // https://arxiv.org/abs/0803.0476
 
-use ahash::AHashMap;
-use ahash::AHashSet;
+use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
 use petgraph::visit::EdgeRef;
 use petgraph::visit::IntoEdgeReferences;
 use pyo3::exceptions::PyValueError;
@@ -34,11 +33,11 @@ struct GraphState {
     /// Number of nodes in the graph
     num_nodes: usize,
     /// Adjacency list: node -> neighbors with weights
-    adj: Vec<AHashMap<usize, f64>>,
+    adj: Vec<HashMap<usize, f64>>,
     /// Total weight of the graph (sum of all edge weights)
     total_weight: f64,
     /// Node metadata to track original nodes during graph aggregation
-    node_metadata: Vec<AHashSet<usize>>,
+    node_metadata: Vec<HashSet<usize>>,
 }
 
 impl GraphState {
@@ -54,13 +53,13 @@ impl GraphState {
     /// * PyErr - If edge weights are not positive or other errors occur
     fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: Option<&PyObject>) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
-        let mut adj = vec![AHashMap::new(); num_nodes];
+        let mut adj = vec![HashMap::new(); num_nodes];
         let mut total_weight = 0.0;
 
         // Initialize node metadata with singleton sets
-        let mut node_metadata: Vec<AHashSet<usize>> = Vec::with_capacity(num_nodes);
+        let mut node_metadata: Vec<HashSet<usize>> = Vec::with_capacity(num_nodes);
         for i in 0..num_nodes {
-            let mut set = AHashSet::new();
+            let mut set = HashSet::new();
             set.insert(i);
             node_metadata.push(set);
         }
@@ -107,23 +106,25 @@ impl GraphState {
     /// * A new GraphState representing the aggregated graph
     fn aggregate(&self, node_to_comm: &[usize]) -> Self {
         // Get number of communities for the new graph
-        let mut community_ids = AHashSet::with_capacity(node_to_comm.len());
+        let mut community_ids = HashSet::with_capacity(node_to_comm.len());
         for &comm in node_to_comm {
             community_ids.insert(comm);
         }
         let num_communities = community_ids.len();
 
         // Create community -> new node id mapping
-        let mut comm_to_new_id = AHashMap::with_capacity(num_communities);
+        let mut comm_to_new_id = HashMap::with_capacity(num_communities);
 
-        // Use enumerate for the loop counter
-        for (idx, comm) in community_ids.into_iter().enumerate() {
+        // Sort community IDs for deterministic iteration
+        let mut sorted_community_ids: Vec<_> = community_ids.into_iter().collect();
+        sorted_community_ids.sort_unstable();
+        for (idx, comm) in sorted_community_ids.into_iter().enumerate() {
             comm_to_new_id.insert(comm, idx);
         }
 
         // Initialize new graph
-        let mut new_adj = vec![AHashMap::new(); num_communities];
-        let mut new_node_metadata = vec![AHashSet::new(); num_communities];
+        let mut new_adj = vec![HashMap::new(); num_communities];
+        let mut new_node_metadata = vec![HashSet::new(); num_communities];
 
         // Aggregate nodes into communities
         for node in 0..self.num_nodes {
@@ -168,9 +169,9 @@ impl GraphState {
 fn get_neighbor_weights(
     node: usize,
     node_to_comm: &[usize],
-    adj: &[AHashMap<usize, f64>],
-) -> AHashMap<usize, f64> {
-    let mut weights = AHashMap::new();
+    adj: &[HashMap<usize, f64>],
+) -> HashMap<usize, f64> {
+    let mut weights = HashMap::new();
 
     // Only include weights to neighbors, not self loops
     for (&neighbor, &weight) in &adj[node] {
@@ -200,13 +201,13 @@ fn run_one_level(
     resolution: f64,
     rng: &mut StdRng,
 ) -> bool {
-    let m = graph.total_weight;
+    let m_2std = graph.total_weight; // This is 2*m_std (sum of all degrees)
     let mut moved = false;
     let max_iterations = 10; // Maximum passes for node movement within a level
     let mut current_iteration = 0;
 
     // Track the total degree of each community
-    let mut community_degrees = AHashMap::with_capacity(graph.num_nodes);
+    let mut community_degrees = HashMap::with_capacity(graph.num_nodes);
 
     // Use enumeration for node_to_comm
     for (node, &comm) in node_to_comm.iter().enumerate().take(graph.num_nodes) {
@@ -214,8 +215,8 @@ fn run_one_level(
         *community_degrees.entry(comm).or_insert(0.0) += degree;
     }
 
-    // Randomize the node order for processing
     let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
+    // Shuffle nodes to match networkx behavior
     nodes.shuffle(rng);
 
     // Continue until no more moves improve modularity or max iterations reached
@@ -236,32 +237,45 @@ fn run_one_level(
             let neighbor_weights = get_neighbor_weights(node, node_to_comm, &graph.adj);
 
             // Weight to current community for removal cost calculation
-            let weight_to_current = *neighbor_weights.get(&current_comm).unwrap_or(&0.0);
-
-            // Calculate removal cost (negative of gain)
-            let remove_cost = -weight_to_current / m
-                + resolution * (community_degrees.get(&current_comm).unwrap_or(&0.0) * node_degree)
-                    / (2.0 * m * m);
 
             // Find the best community to join
             let mut best_comm = current_comm;
-            let mut best_gain = 0.0;
+            let mut max_gain_overall = 0.0; // Represents total Delta Q for the move
 
-            for (&candidate_comm, &weight_to_comm) in &neighbor_weights {
-                // Skip current community as we already calculated its cost
+            // Calculate cost of removal from current community
+            let weight_to_current = *neighbor_weights.get(&current_comm).unwrap_or(&0.0);
+            let sum_deg_current = *community_degrees.get(&current_comm).unwrap_or(&0.0);
+            let removal_cost = -(weight_to_current / m_2std) + (resolution * sum_deg_current * node_degree / (m_2std * m_2std));
+
+            // Iterate over neighbor communities in arbitrary order to match networkx
+            for &candidate_comm in neighbor_weights.keys() {
+                // Skip if it's the same community
                 if candidate_comm == current_comm {
                     continue;
                 }
+                
+                let weight_to_comm = *neighbor_weights.get(&candidate_comm).unwrap_or(&0.0);
+                
+                // Get community degrees before adding node i
+                let sum_deg_target = *community_degrees.get(&candidate_comm).unwrap_or(&0.0);
+                
+                // Gain from adding to target community (NetworkX formula):
+                // ΔQ_add = k_i,in / (2m) - γ * (Σ_tot * k_i) / (2m)²
+                let addition_gain = (weight_to_comm / m_2std) - (resolution * sum_deg_target * node_degree / (m_2std * m_2std));
+                
+                // Total gain = removal_cost + addition_gain
+                let total_gain = removal_cost + addition_gain;
 
-                // Calculate gain for joining this community
-                let sigma_tot = *community_degrees.get(&candidate_comm).unwrap_or(&0.0);
-                let gain = remove_cost + weight_to_comm / m
-                    - resolution * (sigma_tot * node_degree) / (2.0 * m * m);
-
-                if gain > best_gain {
-                    best_gain = gain;
+                // A move is only made if there is a strict improvement in modularity.
+                if total_gain > max_gain_overall {
+                    max_gain_overall = total_gain;
                     best_comm = candidate_comm;
                 }
+            }
+
+            // If the best gain is not positive, revert to the original community.
+            if max_gain_overall <= 0.0 {
+                best_comm = current_comm;
             }
 
             // Add node back to the best community found
@@ -310,7 +324,7 @@ fn run_louvain(
     // Initialize RNG with seed if provided
     let mut rng = match seed {
         Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_entropy(),
+        None => StdRng::from_seed(rand::random()),
     };
 
     // Convert PyGraph to our internal format
@@ -323,7 +337,7 @@ fn run_louvain(
     let mut partitions: Vec<Vec<Vec<usize>>> = Vec::new();
 
     // Calculate initial modularity
-    let mut current_modularity = calculate_modularity(&graph_state, &node_to_comm, resolution);
+    let mut current_modularity = modularity_core(&graph_state, &node_to_comm, resolution);
 
     // Main loop: continue until no more improvement
     let mut improvement = true;
@@ -359,7 +373,7 @@ fn run_louvain(
         partitions.push(partition);
 
         // Calculate modularity for new partition
-        let new_modularity = calculate_modularity(&graph_state, &node_to_comm, resolution);
+        let new_modularity = modularity_core(&graph_state, &node_to_comm, resolution);
 
         // Check if modularity improvement is significant
         if new_modularity - current_modularity <= threshold {
@@ -377,56 +391,6 @@ fn run_louvain(
     }
 
     Ok(partitions)
-}
-
-/// Calculate modularity for a partition
-///
-/// # Arguments
-/// * `graph` - The graph state
-/// * `node_to_comm` - Mapping from node indices to community indices
-/// * `resolution` - Resolution parameter for the modularity calculation
-///
-/// # Returns
-/// * The modularity score
-fn calculate_modularity(graph: &GraphState, node_to_comm: &[usize], resolution: f64) -> f64 {
-    let m = graph.total_weight;
-    if m == 0.0 {
-        return 0.0; // No edges means no modularity
-    }
-
-    let mut q = 0.0;
-    let mut external_degrees = AHashMap::with_capacity(graph.num_nodes);
-    let mut internal_degrees = AHashMap::with_capacity(graph.num_nodes);
-
-    // Calculate total weight within each community and between communities
-    for node in 0..graph.num_nodes {
-        let comm = node_to_comm[node];
-        let mut internal_weight = 0.0;
-        let node_degree = graph.adj[node].values().sum::<f64>();
-
-        for (&neighbor, &weight) in &graph.adj[node] {
-            let neighbor_comm = node_to_comm[neighbor];
-            if comm == neighbor_comm {
-                internal_weight += weight;
-            }
-        }
-
-        // Add to internal weight of community
-        *internal_degrees.entry(comm).or_insert(0.0) += internal_weight;
-
-        // Add to total degree of community
-        *external_degrees.entry(comm).or_insert(0.0) += node_degree;
-    }
-
-    // Calculate modularity: sum over communities
-    for comm in external_degrees.keys() {
-        let comm_internal = *internal_degrees.get(comm).unwrap_or(&0.0);
-        let comm_degree = *external_degrees.get(comm).unwrap_or(&0.0);
-
-        q += comm_internal / (2.0 * m) - resolution * (comm_degree / m).powi(2);
-    }
-
-    q // Modularity definition doesn't require division by 2 here as internal_weight is sum over edges (each edge counted once)
 }
 
 /// Merge small communities into larger ones
@@ -566,7 +530,7 @@ fn merge_small_communities(
 #[pyo3(
     text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1)"
 )]
-#[pyo3(signature = (graph, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1))]
+#[pyo3(signature = (graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1))]
 pub fn louvain_communities(
     py: Python,
     graph: PyObject,
@@ -631,6 +595,15 @@ pub fn louvain_communities(
 /// Modularity is a measure of the quality of a division of a network into
 /// communities. Higher values indicate a better partition.
 ///
+/// The formula used is the standard Newman-Girvan modularity:
+/// Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
+///
+/// where:
+/// - L_c is the number of edges inside community c
+/// - k_c is the sum of degrees of nodes in community c  
+/// - m is the total number of edges in the graph
+/// - γ is the resolution parameter
+///
 /// Args:
 ///     graph: The PyGraph object.
 ///     partition: A list of lists, where each inner list is a community
@@ -650,7 +623,7 @@ pub fn louvain_communities(
 ///                 multiple communities).
 #[pyfunction]
 #[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
-#[pyo3(signature = (graph, partition, weight_fn=None, resolution=1.0))]
+#[pyo3(signature = (graph, partition, /, weight_fn=None, resolution=1.0))]
 pub fn modularity(
     py: Python,
     graph: PyObject,
@@ -658,66 +631,80 @@ pub fn modularity(
     weight_fn: Option<PyObject>,
     resolution: Option<f64>,
 ) -> PyResult<f64> {
-    // Validate input graph
-    let rx_mod = py.import("rustworkx")?;
-    let py_graph_type = rx_mod.getattr("PyGraph")?;
-    if !graph.bind(py).is_instance(&py_graph_type)? {
-        return Err(pyo3::exceptions::PyTypeError::new_err(
-            "Input graph must be a PyGraph instance.",
-        ));
+    // 1) Validate graph type
+    if !graph.bind(py).is_instance(&py.import("rustworkx")?.getattr("PyGraph")?)? {
+        return Err(pyo3::exceptions::PyTypeError::new_err("Input must be PyGraph"));
     }
+    let pyg: PyGraph = graph.extract(py)?;
 
-    let graph_ref = graph.extract::<PyGraph>(py)?;
-
-    // Handle empty graph
-    if graph_ref.graph.node_count() == 0 {
-        if partition.is_empty() {
-            return Ok(0.0); // Convention: empty graph has modularity 0
-        } else {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "Partition must be empty for an empty graph.",
-            ));
+    // 2) Validate partition and create node_to_comm mapping
+    let n = pyg.graph.node_count();
+    let mut node_to_comm = vec![usize::MAX; n];
+    for (cid, comm) in partition.iter().enumerate() {
+        for &idx in comm {
+            if idx >= n { return Err(pyo3::exceptions::PyValueError::new_err("Node index out of bounds in partition.")); }
+            if node_to_comm[idx] != usize::MAX {
+                return Err(pyo3::exceptions::PyValueError::new_err("Node belongs to more than one community in partition."));
+            }
+            node_to_comm[idx] = cid;
         }
     }
-
-    // Convert partition (list of lists) to node_to_comm mapping
-    let num_nodes = graph_ref.graph.node_count();
-    let mut node_to_comm = vec![usize::MAX; num_nodes]; // Use usize::MAX as unassigned marker
-    for (comm_id, community) in partition.iter().enumerate() {
-        for &node_index in community {
-            if node_index >= num_nodes {
-                return Err(PyValueError::new_err(format!(
-                    "Node index {} in partition is out of bounds for graph with {} nodes.",
-                    node_index, num_nodes
-                )));
-            }
-            // Check if node is already assigned to another community
-            if node_to_comm[node_index] != usize::MAX {
-                return Err(PyValueError::new_err(format!(
-                    "Node {} is assigned to multiple communities in the partition.",
-                    node_index
-                )));
-            }
-            node_to_comm[node_index] = comm_id;
-        }
-    }
-
-    // Check if all nodes are assigned
     if node_to_comm.iter().any(|&c| c == usize::MAX) {
-        return Err(PyValueError::new_err(
-            "Partition does not cover all nodes in the graph.",
-        ));
+        return Err(pyo3::exceptions::PyValueError::new_err("Partition is not a complete partition of the graph."));
     }
 
-    // Convert PyGraph to GraphState
-    let weight_fn_ref = weight_fn.as_ref();
-    let graph_state = GraphState::from_pygraph(py, &graph_ref, weight_fn_ref)?;
+    // 3) Create GraphState and call the core modularity function
+    let gs = GraphState::from_pygraph(py, &pyg, weight_fn.as_ref())?;
+    Ok(modularity_core(&gs, &node_to_comm, resolution.unwrap_or(1.0)))
+}
 
-    // Get resolution, default to 1.0
-    let resolution_val = resolution.unwrap_or(1.0);
 
-    // Calculate modularity using the existing internal function
-    let modularity_score = calculate_modularity(&graph_state, &node_to_comm, resolution_val);
+fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
+    // Newman-Girvan modularity: Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
+    // where m is the total weight of edges (not the sum of degrees!)
+    let m = gs.total_weight / 2.0;  // gs.total_weight is the sum of degrees, so divide by 2 for m
+    if m == 0.0 { return 0.0; }
 
-    Ok(modularity_score)
+    let mut l_c: HashMap<usize, f64> = HashMap::new();   // internal edge weights of communities
+    let mut k_c: HashMap<usize, f64> = HashMap::new();   // sum of degrees of communities
+
+    // First, calculate the sum of degrees for each community
+    for node in 0..gs.num_nodes {
+        let comm = node_to_comm[node];
+        let node_degree = gs.adj[node].values().sum::<f64>();
+        *k_c.entry(comm).or_insert(0.0) += node_degree;
+    }
+
+    // Now, calculate the internal edge weights for each community
+    for u in 0..gs.num_nodes {
+        let u_comm = node_to_comm[u];
+        
+        for (&v, &weight) in &gs.adj[u] {
+            let v_comm = node_to_comm[v];
+            
+            // If an edge is within a community, add its weight to the internal weight.
+            // Count each edge only once (u <= v).
+            if u_comm == v_comm && u <= v {
+                *l_c.entry(u_comm).or_insert(0.0) += weight;
+            }
+        }
+    }
+
+    // Final calculation: Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
+    let mut q = 0.0;
+    let mut processed_communities = std::collections::HashSet::new();
+    
+    for &comm_id in node_to_comm.iter() {
+        if processed_communities.contains(&comm_id) {
+            continue; // Community already processed
+        }
+        processed_communities.insert(comm_id);
+        
+        let lc = *l_c.get(&comm_id).unwrap_or(&0.0);
+        let kc = *k_c.get(&comm_id).unwrap_or(&0.0);
+        
+        q += (lc / m) - gamma * (kc / (2.0 * m)).powi(2);
+    }
+
+    q
 }
