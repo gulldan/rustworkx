@@ -12,12 +12,12 @@ from dataset_loaders import (
     load_facebook,
     load_florentine_families,
     load_football,
-    load_graph_edges_no_gt_polars,
     load_karate_club,
     load_les_miserables,
+    load_lfr,
     load_polblogs,
     load_political_books,
-    load_wiki_news_sim,
+    load_wiki_news_edges,
 )
 
 # List of resolution parameters to test for tunable algorithms
@@ -33,7 +33,9 @@ RX_LOUVAIN_COLOR = "#ff7f0e"  # Safety Orange
 RX_LEIDEN_COLOR = "#2ca02c"  # Cooked Asparagus Green
 RX_LPA_U_COLOR = "#d62728"  # Brick Red
 RX_LPA_W_COLOR = "#9467bd"  # Muted Purple
+RX_LPA_STRONGEST_COLOR = "#17becf"  # Cyan
 CDLIB_LEIDEN_COLOR = "#8c564b"  # Chestnut Brown
+LEIDENALG_COLOR = "#bcbd22"  # Curry Yellow-Green (original leidenalg)
 NX_LPA_COLOR = "#e377c2"  # Pink
 GRID_COLOR = "#E5E5E5"  # Plotting grid color
 
@@ -51,6 +53,7 @@ _TUNABLE_ALGOS_SETUP = [
         "color": NX_LOUVAIN_COLOR,
         "runner_name": "run_nx_algorithm",
         "is_rx": False,
+        "needs_adjacency": False,
     },
     {
         "base_prefix": "rx_louvain",
@@ -58,6 +61,7 @@ _TUNABLE_ALGOS_SETUP = [
         "color": RX_LOUVAIN_COLOR,
         "runner_name": "run_rx_algorithm",
         "is_rx": True,
+        "needs_adjacency": True,  # Use NX adjacency for exact matching on all graphs
     },
     {
         "base_prefix": "rx_leiden",
@@ -65,6 +69,7 @@ _TUNABLE_ALGOS_SETUP = [
         "color": RX_LEIDEN_COLOR,
         "runner_name": "run_rx_leiden_algorithm",
         "is_rx": True,
+        "needs_adjacency": False,
     },
 ]
 for algo_setup in _TUNABLE_ALGOS_SETUP:
@@ -79,6 +84,7 @@ for algo_setup in _TUNABLE_ALGOS_SETUP:
                 "runner_name": algo_setup["runner_name"],
                 "is_rx": algo_setup["is_rx"],
                 "run_args": {"resolution": res_val},
+                "needs_adjacency": algo_setup.get("needs_adjacency", False),
             }
         )
 
@@ -93,12 +99,21 @@ _NON_TUNABLE_ALGOS_SETUP = [
         "run_args": {},
     },
     {
+        "prefix": "leidenalg",
+        "name": "leidenalg (orig)",
+        "color": LEIDENALG_COLOR,
+        "runner_name": "run_leidenalg_algorithm",
+        "is_rx": False,
+        "run_args": {},
+    },
+    {
         "prefix": "rx_lpa_unweighted",
         "name": "RX LPA (U)",
         "color": RX_LPA_U_COLOR,
         "runner_name": "run_rx_lpa_algorithm",
         "is_rx": True,
-        "run_args": {"weighted": False, "seed": 42},
+        "run_args": {"weight": None, "seed": 42},
+        "needs_adjacency": True,  # Flag to indicate this algo needs NX adjacency for exact matching
     },
     {
         "prefix": "rx_lpa_weighted",
@@ -106,7 +121,16 @@ _NON_TUNABLE_ALGOS_SETUP = [
         "color": RX_LPA_W_COLOR,
         "runner_name": "run_rx_lpa_algorithm",
         "is_rx": True,
-        "run_args": {"weighted": True, "seed": 42},
+        "run_args": {"weight": "weight", "seed": 42},
+        "needs_adjacency": True,  # Flag to indicate this algo needs NX adjacency for exact matching
+    },
+    {
+        "prefix": "rx_lpa_strongest",
+        "name": "RX LPA (Strongest)",
+        "color": RX_LPA_STRONGEST_COLOR,
+        "runner_name": "run_rx_lpa_strongest_algorithm",
+        "is_rx": True,
+        "run_args": {"weight": "weight", "seed": 42},
     },
     {
         "prefix": "nx_lpa",
@@ -127,6 +151,7 @@ for algo_setup in _NON_TUNABLE_ALGOS_SETUP:
             "runner_name": algo_setup["runner_name"],
             "is_rx": algo_setup["is_rx"],
             "run_args": algo_setup["run_args"],
+            "needs_adjacency": algo_setup.get("needs_adjacency", False),
         }
     )
 
@@ -142,13 +167,9 @@ for algo_setup in _NON_TUNABLE_ALGOS_SETUP:
 # Loaders returning tuples will require modification of the benchmark script to work.
 DATASETS: dict[str, Callable[..., Any]] = {
     # Dict-based loaders (compatible with current benchmark script)
-    "Wiki News Sim": load_wiki_news_sim,
-
-    # Temporarily disable other datasets for focused testing
     # "Graph Edges GT Clusters": load_graph_edges_gt_clusters,
     # "Graph Edges LLM Clusters": load_graph_edges_llm_clusters,
-    "Graph Edges No GT": load_graph_edges_no_gt_polars,
-
+    # "Graph Edges No GT": load_graph_edges_no_gt_polars,
     # Simple loaders (currently incompatible, require benchmark script modification)
     "Karate Club": load_karate_club,
     "Davis Southern Women": load_davis_women,
@@ -162,12 +183,12 @@ DATASETS: dict[str, Callable[..., Any]] = {
     "Facebook": load_facebook,
     "Citeseer": load_citeseer,
     "Email EU Core": load_email_eu_core,
-    # "Wiki News": load_graph_edges_no_gt_polars,
     # "Graph Edges (CSV)": load_graph_edges_csv,
     # "Graph Edges (Parquet)": load_graph_edges_parquet,
     # "Graph Edges (9M Parquet)": load_graph_edges_9m_parquet,
-    # "LFR (n=250, mu=0.1)": lambda: load_lfr(n=250, mu=0.1),
-    # "LFR (n=1000, mu=0.3)": lambda: load_lfr(n=1000, mu=0.3),
+    "Wiki News Edges": load_wiki_news_edges,
+    "LFR (n=250, mu=0.1)": lambda: load_lfr(n=250, mu=0.1),
+    "LFR (n=1000, mu=0.3)": lambda: load_lfr(n=1000, mu=0.3),
     # "Large Synthetic (SBM)": load_large_synthetic,
     # "Orkut": load_orkut,
     # "LiveJournal": load_livejournal,

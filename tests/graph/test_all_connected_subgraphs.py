@@ -85,13 +85,9 @@ class TestGraphAllConnectedSubgraphs(unittest.TestCase):
         self.assertConnectedSubgraphsEqual(
             rustworkx.connected_subgraphs(graph, 1), [[n] for n in graph.nodes()]
         )
-        self.assertConnectedSubgraphsEqual(
-            rustworkx.connected_subgraphs(graph, 2), graph.edge_list()
-        )
+        self.assertConnectedSubgraphsEqual(rustworkx.connected_subgraphs(graph, 2), graph.edge_list())
         self.assertConnectedSubgraphsEqual(rustworkx.connected_subgraphs(graph, 3), [[0, 1, 2]])
         self.assertConnectedSubgraphsEqual(rustworkx.connected_subgraphs(graph, 4), [])
 
     def assertConnectedSubgraphsEqual(self, subgraphs, expected):
-        self.assertEqual(
-            {tuple(sorted(el)) for el in subgraphs}, {tuple(sorted(el)) for el in expected}
-        )
+        self.assertEqual({tuple(sorted(el)) for el in subgraphs}, {tuple(sorted(el)) for el in expected})

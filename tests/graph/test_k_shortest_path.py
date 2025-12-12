@@ -46,9 +46,7 @@ class TestKShortestpath(unittest.TestCase):
     def test_k_graph_shortest_path_with_goal_node_hole(self):
         graph = rustworkx.generators.path_graph(4)
         graph.remove_node(0)
-        res = rustworkx.graph_k_shortest_path_lengths(
-            graph, start=1, k=1, edge_cost=lambda _: 1, goal=3
-        )
+        res = rustworkx.graph_k_shortest_path_lengths(graph, start=1, k=1, edge_cost=lambda _: 1, goal=3)
         self.assertEqual({3: 2}, res)
 
     def test_graph_k_shortest_path_with_invalid_weight(self):
@@ -68,8 +66,6 @@ class TestKShortestpath(unittest.TestCase):
         g = rustworkx.PyGraph()
         a = g.add_node("A")
         b = g.add_node("B")
-        path_lengths = rustworkx.graph_k_shortest_path_lengths(
-            g, start=a, k=1, edge_cost=float, goal=b
-        )
+        path_lengths = rustworkx.graph_k_shortest_path_lengths(g, start=a, k=1, edge_cost=float, goal=b)
         expected = {}
         self.assertEqual(expected, path_lengths)

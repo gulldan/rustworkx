@@ -12,7 +12,7 @@
 
 use crate::graph::PyGraph;
 // Removed StablePyGraph import as PyGraph uses petgraph::stable_graph::StableGraph directly
-use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
+use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 // use itertools::Itertools; // Убрано, так как больше не используется
 use petgraph::graph::NodeIndex;
 use petgraph::unionfind::UnionFind;
@@ -54,17 +54,17 @@ const MAX_NODES_FOR_BITSET: usize = 64;
 ///         Communities can overlap.
 #[pyfunction]
 #[pyo3(signature = (graph, k, /), text_signature = "(graph, k, /)")]
-pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Vec<usize>>> {
+pub fn cpm_communities(py: Python, graph: Py<PyAny>, k: usize) -> PyResult<Vec<Vec<usize>>> {
     // --- Input Validation ---
     if k < 2 {
         return Err(PyValueError::new_err("k must be at least 2"));
     }
-    let graph_ref = match graph.extract::<PyRef<PyGraph>>(py) {
+    let graph_ref = match graph.bind(py).extract::<PyRef<PyGraph>>() {
         Ok(graph) => graph,
         Err(_) => {
             return Err(PyTypeError::new_err(
                 "Input graph must be a PyGraph instance.",
-            ))
+            ));
         }
     };
     let node_count = graph_ref.graph.node_count();
@@ -135,8 +135,7 @@ pub fn cpm_communities(py: Python, graph: PyObject, k: usize) -> PyResult<Vec<Ve
         node_map_rev = node_map_rev_bitset; // Assign the reverse map for this path
     } else {
         // --- HashSet Implementation Path (for larger graphs) ---
-        let mut node_map_fwd_hashset: HashMap<NodeIndex, u32> =
-            HashMap::with_capacity(node_count);
+        let mut node_map_fwd_hashset: HashMap<NodeIndex, u32> = HashMap::with_capacity(node_count);
         let mut node_map_rev_hashset: Vec<NodeIndex> = Vec::with_capacity(node_count);
         // Adjacency represented by HashSets
         let mut adj_hashset: HashMap<u32, HashSet<u32>> = HashMap::with_capacity(node_count);
@@ -386,7 +385,7 @@ fn find_k_cliques_degeneracy_bitset(
             &mut cliques,
             &mut potential_clique, // Current clique (R)
             candidates_mask,       // Candidate nodes (P)
-            excluded_mask,       // Excluded nodes (X)
+            excluded_mask,         // Excluded nodes (X)
             k,                     // Target clique size
         );
 
@@ -440,7 +439,7 @@ fn bron_kerbosch_degeneracy_bitset_recursive(
         // Recursive call:
         potential_clique.push(v); // R := R U {v}
         let new_candidates_mask = candidates_mask & neighbors_v_mask; // P := P intersect N(v)
-        let new_excluded_mask = excluded_mask & neighbors_v_mask;   // X := X intersect N(v)
+        let new_excluded_mask = excluded_mask & neighbors_v_mask; // X := X intersect N(v)
 
         bron_kerbosch_degeneracy_bitset_recursive(
             adj,
@@ -452,9 +451,9 @@ fn bron_kerbosch_degeneracy_bitset_recursive(
         );
 
         // Backtrack:
-        potential_clique.pop();   // R := R \ {v}
+        potential_clique.pop(); // R := R \ {v}
         candidates_mask &= !v_mask; // P := P \ {v}
-        excluded_mask |= v_mask;    // X := X U {v}
+        excluded_mask |= v_mask; // X := X U {v}
     }
 }
 
@@ -582,8 +581,8 @@ fn find_k_cliques_degeneracy_hashset(
             adj,
             &mut cliques,
             &mut potential_clique, // R
-            candidates, // P (owned set passed to recursion)
-            excluded,   // X (owned set passed to recursion)
+            candidates,            // P (owned set passed to recursion)
+            excluded,              // X (owned set passed to recursion)
             k,
         );
 
@@ -601,8 +600,8 @@ fn bron_kerbosch_degeneracy_hashset_recursive(
     adj: &HashMap<u32, HashSet<u32>>,
     cliques: &mut Vec<Vec<u32>>,
     potential_clique: &mut Vec<u32>, // R
-    mut candidates: HashSet<u32>,   // P
-    mut excluded: HashSet<u32>,     // X
+    mut candidates: HashSet<u32>,    // P
+    mut excluded: HashSet<u32>,      // X
     k: usize,
 ) {
     // Base case 1: Found a k-clique
@@ -637,7 +636,7 @@ fn bron_kerbosch_degeneracy_hashset_recursive(
         potential_clique.push(v); // R := R U {v}
         // Calculate new candidate and excluded sets for the recursive call
         let new_candidates = candidates.intersection(neighbors_v).cloned().collect(); // P intersect N(v)
-        let new_excluded = excluded.intersection(neighbors_v).cloned().collect();   // X intersect N(v)
+        let new_excluded = excluded.intersection(neighbors_v).cloned().collect(); // X intersect N(v)
 
         bron_kerbosch_degeneracy_hashset_recursive(
             adj,
@@ -650,7 +649,7 @@ fn bron_kerbosch_degeneracy_hashset_recursive(
 
         // Backtrack
         potential_clique.pop(); // R := R \ {v}
-        candidates.remove(&v);  // P := P \ {v}
-        excluded.insert(v);     // X := X U {v}
+        candidates.remove(&v); // P := P \ {v}
+        excluded.insert(v); // X := X U {v}
     }
 }

@@ -29,7 +29,6 @@ import cdlib.algorithms  # Added for Leiden/Infomap
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
-import rustworkx as rx
 
 # Import shared configurations from benchmark_config_data.py
 from benchmark_config_data import (
@@ -64,6 +63,8 @@ from plotting import (
     plot_gcr_pcp_vs_jaccard_threshold,  # Added new import
 )
 
+import rustworkx as rx
+
 # Setup logger for this module
 logger = logging.getLogger(__name__)
 # Basic configuration will be done in main or run_benchmark to avoid multiple basicConfig calls.
@@ -76,6 +77,7 @@ try:
         logger.info(f"Available rustworkx attributes: {', '.join(rx_attrs)}")
 except Exception as e:
     logger.error(f"Error checking rustworkx attributes: {e}", exc_info=True)
+
 
 # Helper to get runner function from its name string (defined globally or in this module)
 # This is needed because we store runner names as strings in ALGORITHMS_BENCHMARK_CONFIG
@@ -99,15 +101,20 @@ def _get_runner_function_by_name(name: str) -> Callable[..., Any]:
     """
     # Special handling for cdlib_leiden which needs a wrapper
     if name == "run_cdlib_leiden":
-        return lambda g, **args: run_cdlib_algorithm(g, "leiden", **args) # args not used by infomap, Leiden doesn't take resolution here
-    
+        return lambda g, **args: run_cdlib_algorithm(
+            g, "leiden", **args
+        )  # args not used by infomap, Leiden doesn't take resolution here
+
     # Other functions are directly available in the global scope of this module
     # or will be once all function definitions are processed.
     runner_func: Callable[..., Any] | None = globals().get(name)
     if runner_func is None or not callable(runner_func):
         raise ValueError(f"Runner function '{name}' not found or not callable in benchmark_community.py")
     return runner_func
+
+
 # --- End Centralized Algorithm Configuration ---
+
 
 def run_benchmark() -> None:
     """Runs the full community detection benchmark.
@@ -119,7 +126,9 @@ def run_benchmark() -> None:
     - Generating comparison charts, markdown tables, and other plots.
     """
     # Configure logging here if this is the main entry point for standalone runs
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", force=True)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", force=True
+    )
 
     logger.info("=" * 80)
     logger.info("RUSTWORKX vs NETWORKX COMMUNITY DETECTION BENCHMARK")
@@ -127,57 +136,69 @@ def run_benchmark() -> None:
     logger.info("\nThis benchmark will compare RustWorkX and NetworkX implementations of")
     logger.info("the Louvain community detection algorithm on various datasets.")
     logger.info("Results will be saved as high-quality image files.\n")
-    
+
     base_result_folder: str = "results"
     timestamp: str = datetime.now().strftime("%Y%m%d")
     result_folder: str = os.path.join(base_result_folder, timestamp)
-    
+
     if not os.path.exists(base_result_folder):
         os.makedirs(base_result_folder)
     os.makedirs(result_folder, exist_ok=True)
-    
+
     logger.info(f"Results will be saved to '{result_folder}'")
-    
+
     plt.switch_backend("Agg")
-    
+
     benchmark_results: list[dict[str, Any]] = []
-    
+
     for dataset_name, load_func in DATASETS.items():
         logger.info(f"\n{'-'.ljust(40, '-')}")
         logger.info(f"Processing {dataset_name} dataset...")
         logger.info(f"{'-'.ljust(40, '-')}")
-        
+
         if dataset_name in SKIPPED_DATASETS:
             logger.warning(f"🚧 Skipping {dataset_name} as it is marked for skipping (placeholder).")
-            benchmark_results.append({
-                "dataset": dataset_name, "nodes": 0, "edges": 0,
-                "status": "skipped_placeholder",
-            })
+            benchmark_results.append(
+                {
+                    "dataset": dataset_name,
+                    "nodes": 0,
+                    "edges": 0,
+                    "status": "skipped_placeholder",
+                }
+            )
             continue
-            
+
         try:
-            result_data: dict[str, Any] | None = run_benchmark_on_dataset(dataset_name, load_func, result_folder)
+            result_data: dict[str, Any] | None = run_benchmark_on_dataset(
+                dataset_name, load_func, result_folder
+            )
             if result_data:
                 benchmark_results.append(result_data)
             logger.info(f"Completed {dataset_name} dataset. Continuing to next dataset...")
         except FileNotFoundError as fnf_error:
             logger.error(f"❌ Skipping {dataset_name}: Dataset file not found - {fnf_error}")
-            benchmark_results.append({
-                "dataset": dataset_name, "nodes": 0, "edges": 0,
-                "error": f"File not found: {fnf_error}"
-            })
+            benchmark_results.append(
+                {
+                    "dataset": dataset_name,
+                    "nodes": 0,
+                    "edges": 0,
+                    "error": f"File not found: {fnf_error}",
+                }
+            )
         except Exception as e:
-            logger.exception(f"❌ Error processing {dataset_name} dataset: {str(e)}") # logger.exception includes traceback
-    
+            logger.exception(
+                f"❌ Error processing {dataset_name} dataset: {str(e)}"
+            )  # logger.exception includes traceback
+
     logger.info("\n" + "=" * 80)
     logger.info("GENERATING FINAL PERFORMANCE COMPARISON CHART")
     logger.info("=" * 80)
     try:
         chart_path: str = os.path.join(result_folder, "community_detection_comparison.png")
         create_comparison_chart(benchmark_results, output_file=chart_path)
-    except Exception as e: 
+    except Exception as e:
         logger.error(f"Error generating comparison chart: {str(e)}", exc_info=True)
-    
+
     logger.info("\n" + "=" * 80)
     logger.info("BENCHMARK COMPLETE - VISUALIZATION FILES GENERATED:")
     logger.info("=" * 80)
@@ -186,16 +207,16 @@ def run_benchmark() -> None:
         for i, png_file in enumerate(png_files):
             file_path: str = os.path.join(result_folder, png_file)
             file_size: float = os.path.getsize(file_path) / (1024 * 1024)
-            logger.info(f"{i+1}. {png_file} ({file_size:.2f} MB)")
+            logger.info(f"{i + 1}. {png_file} ({file_size:.2f} MB)")
         logger.info(f"\nYou can find them in the '{result_folder}' directory.")
-    else: 
+    else:
         logger.warning("No visualization files were generated. Please check for errors.")
-        
+
     logger.info("\n" + "=" * 80)
     logger.info("GENERATING RESULTS TABLE (MARKDOWN)")
     logger.info("=" * 80)
     table_string: str = generate_results_table(benchmark_results)
-    logger.info(f"Markdown Table:\n{table_string}") # Log the table string itself
+    logger.info(f"Markdown Table:\n{table_string}")  # Log the table string itself
     table_filename: str = os.path.join(result_folder, "benchmark_results_table.md")
     try:
         with open(table_filename, "w") as f:
@@ -210,7 +231,7 @@ def run_benchmark() -> None:
     table_image_filename: str = os.path.join(result_folder, "benchmark_results_table.png")
     try:
         generate_results_table_matplotlib(benchmark_results, output_file=table_image_filename)
-    except Exception as e: 
+    except Exception as e:
         logger.error(f"Error generating results table image: {str(e)}", exc_info=True)
 
     logger.info("\n" + "=" * 80)
@@ -222,6 +243,7 @@ def run_benchmark() -> None:
         logger.error(f"Error generating GCR/PCP vs. Jaccard Threshold plots: {str(e)}", exc_info=True)
 
     logger.info("\nBenchmark completed successfully!")
+
 
 @measure_memory
 def run_nx_algorithm(graph: nx.Graph, resolution: float = 1.0) -> list[set]:
@@ -241,44 +263,60 @@ def run_nx_algorithm(graph: nx.Graph, resolution: float = 1.0) -> list[set]:
     """
     try:
         if graph.number_of_edges() == 0:
-            logger.warning("  Graph has no edges, NetworkX Louvain may fail or return trivial communities.")
+            logger.warning(
+                "  Graph has no edges, NetworkX Louvain may fail or return trivial communities."
+            )
             return [{node} for node in graph.nodes()]
-        
+
         for u, v, data in graph.edges(data=True):
             if "weight" not in data:
                 graph.edges[u, v]["weight"] = 1.0
-        
-        communities_gen: list[set] = nx.community.louvain_communities(graph, weight="weight", seed=42, resolution=resolution)
-        
+
+        communities_gen: list[set] = nx.community.louvain_communities(
+            graph, weight="weight", seed=42, resolution=resolution
+        )
+
         return [set(c) for c in communities_gen if c] if communities_gen else []
     except Exception as e:
         logger.error(f"  Error in NetworkX Louvain (resolution={resolution}): {e}", exc_info=True)
         return []
 
+
 @measure_memory
-def run_rx_algorithm(graph: rx.PyGraph, resolution: float = 1.0) -> list[list[int]]:
+def run_rx_algorithm(
+    graph: rx.PyGraph, resolution: float = 1.0, adjacency: list[list[int]] | None = None
+) -> list[list[int]]:
     """Runs the RustWorkX Louvain community detection algorithm.
 
     Args:
         graph (rx.PyGraph): The input RustWorkX graph.
         resolution (float, optional): Resolution parameter for Louvain. Defaults to 1.0.
+        adjacency (Optional[list[list[int]]]): Pre-built adjacency list for exact NetworkX matching.
+            If provided, uses NX's neighbor order for deterministic tie-breaking.
 
     Returns:
         List[List[int]]: A list of lists, where each inner list contains the
                          node indices (RustWorkX internal IDs) of a detected community.
                          Returns an empty list if an error occurs.
     """
+
     def weight_fn(edge: Any) -> float:
         return float(edge)
+
     try:
-        communities: list[list[int]] = rx.community.louvain_communities(graph, weight_fn=weight_fn, seed=42, resolution=resolution) # type: ignore
+        communities: list[list[int]] = rx.community.louvain_communities(
+            graph, weight_fn=weight_fn, seed=42, resolution=resolution, adjacency=adjacency
+        )  # type: ignore
         return communities
     except Exception as e:
         logger.error(f"  Error in RustWorkX Louvain (resolution={resolution}): {e}", exc_info=True)
         return []
 
+
 @measure_memory
-def run_cdlib_algorithm(graph: nx.Graph, algorithm_name: str, resolution: float = 1.0) -> list[list[Any]]:
+def run_cdlib_algorithm(
+    graph: nx.Graph, algorithm_name: str, resolution: float = 1.0
+) -> list[list[Any]]:
     """Runs a specified cdlib community detection algorithm.
 
     Currently supports 'leiden' and 'infomap'.
@@ -301,23 +339,28 @@ def run_cdlib_algorithm(graph: nx.Graph, algorithm_name: str, resolution: float 
     coms_result: list[list[Any]] = []
     try:
         if algorithm_name == "leiden":
-            coms_obj: cdlib.classes.node_clustering.NodeClustering = cdlib.algorithms.leiden(graph, weights="weight")
+            coms_obj: cdlib.classes.node_clustering.NodeClustering = cdlib.algorithms.leiden(
+                graph, weights="weight"
+            )
             if hasattr(coms_obj, "communities") and isinstance(coms_obj.communities, list):
                 coms_result = coms_obj.communities
         elif algorithm_name == "infomap":
-            coms_obj: cdlib.classes.node_clustering.NodeClustering = cdlib.algorithms.infomap(graph, flags="--seed 42")
+            coms_obj: cdlib.classes.node_clustering.NodeClustering = cdlib.algorithms.infomap(
+                graph, flags="--seed 42"
+            )
             if hasattr(coms_obj, "communities") and isinstance(coms_obj.communities, list):
                 coms_result = coms_obj.communities
-            elif isinstance(coms_obj, list): # Infomap might directly return a list
+            elif isinstance(coms_obj, list):  # Infomap might directly return a list
                 coms_result = coms_obj
         else:
             raise ValueError(f"Unknown cdlib algorithm: {algorithm_name}")
     except Exception as e:
         resolution_info: str = f"resolution={resolution}" if algorithm_name == "leiden" else "N/A"
         logger.error(f"  Error in cdlib {algorithm_name} ({resolution_info}): {e}", exc_info=True)
-        return [] 
-        
+        return []
+
     return [list(c) for c in coms_result if c] if coms_result else []
+
 
 @measure_memory
 def run_rx_leiden_algorithm(graph: rx.PyGraph, resolution: float = 1.0) -> list[list[int]]:
@@ -332,31 +375,36 @@ def run_rx_leiden_algorithm(graph: rx.PyGraph, resolution: float = 1.0) -> list[
                          node indices (RustWorkX internal IDs) of a detected community.
                          Returns an empty list if an error occurs.
     """
+
     def weight_fn(edge: Any) -> float:
         if isinstance(edge, int | float):
             return float(edge)
         elif isinstance(edge, dict) and "weight" in edge:
             return float(edge["weight"])
         return 1.0
+
     try:
-        communities: list[list[int]] = rx.community.leiden_communities( # type: ignore
-            graph, 
-            resolution=resolution, 
-            seed=42
+        communities: list[list[int]] = rx.community.leiden_communities(  # type: ignore
+            graph, resolution=resolution, seed=42
         )
         return communities
     except Exception as e:
         logger.error(f"  Error in RustWorkX Leiden (resolution={resolution}): {e}", exc_info=True)
         return []
 
+
 @measure_memory
-def run_rx_lpa_algorithm(graph: rx.PyGraph, weighted: bool, seed: int | None) -> list[list[int]]:
+def run_rx_lpa_algorithm(
+    graph: rx.PyGraph, weight: str | None, seed: int | None, adjacency: list[list[int]] | None = None
+) -> list[list[int]]:
     """Runs the RustWorkX Label Propagation Algorithm (LPA).
 
     Args:
         graph (rx.PyGraph): The input RustWorkX graph.
-        weighted (bool): Whether to use edge weights in the LPA process.
+        weight (str | None): The name of the edge attribute to use as weight.
         seed (Optional[int]): A seed for the random number generator used by LPA.
+        adjacency (Optional[list[list[int]]]): Pre-built adjacency list for exact NetworkX matching.
+            If provided, must preserve the same neighbor order as NetworkX's G[node].keys().
 
     Returns:
         List[List[int]]: A list of lists, where each inner list contains the
@@ -364,11 +412,30 @@ def run_rx_lpa_algorithm(graph: rx.PyGraph, weighted: bool, seed: int | None) ->
                          Returns an empty list if an error occurs.
     """
     try:
-        communities: list[list[int]] = rx.community.label_propagation_communities(graph, weighted=weighted, seed=seed) # type: ignore
+        # Match NetworkX behavior: run until convergence (no max_iterations cap).
+        communities = rx.community.asyn_lpa_communities(
+            graph, weight=weight, seed=seed, adjacency=adjacency
+        )  # type: ignore
         return communities
     except Exception as e:
-        logger.error(f"  Error in RustWorkX LPA (weighted={weighted}): {e}", exc_info=True)
+        logger.error(f"  Error in RustWorkX LPA (weight={weight}): {e}", exc_info=True)
         return []
+
+
+@measure_memory
+def run_rx_lpa_strongest_algorithm(
+    graph: rx.PyGraph, weight: str | None, seed: int | None
+) -> list[list[int]]:
+    """Runs the RustWorkX strongest-edge Label Propagation variant."""
+    try:
+        communities: list[list[int]] = rx.community.asyn_lpa_communities_strongest(
+            graph, weight=weight, seed=seed
+        )  # type: ignore
+        return communities
+    except Exception as e:
+        logger.error(f"  Error in RustWorkX strongest-edge LPA (weight={weight}): {e}", exc_info=True)
+        return []
+
 
 @measure_memory
 def run_nx_lpa_algorithm(graph: nx.Graph, seed: int | None) -> list[set]:
@@ -386,18 +453,70 @@ def run_nx_lpa_algorithm(graph: nx.Graph, seed: int | None) -> list[set]:
                    occurs.
     """
     try:
+        # NX has no max_iterations; on large graphs it can be slow. For consistency with RX cap,
+        # we accept full convergence here to compare quality; skips handled elsewhere for huge graphs.
         communities_generator = nx.community.asyn_lpa_communities(graph, weight="weight", seed=seed)
-        return [set(c) for c in communities_generator if c] 
+        return [set(c) for c in communities_generator if c]
     except Exception as e:
         logger.error(f"  Error in NetworkX LPA: {e}", exc_info=True)
         return []
 
+
+@measure_memory
+def run_leidenalg_algorithm(graph: nx.Graph) -> list[list[Any]]:
+    """Runs the original leidenalg Leiden algorithm (by V.A. Traag).
+
+    This is the reference C++ implementation from https://github.com/vtraag/leidenalg
+
+    Args:
+        graph (nx.Graph): The input NetworkX graph.
+
+    Returns:
+        List[List[Any]]: A list of lists, where each inner list contains the
+                         node IDs of a detected community. Returns an empty list
+                         if an error occurs.
+    """
+    try:
+        import igraph as ig
+        import leidenalg
+
+        # Convert NetworkX to igraph
+        nodes = list(graph.nodes())
+        node_to_idx = {n: i for i, n in enumerate(nodes)}
+        idx_to_node = {i: n for n, i in node_to_idx.items()}
+
+        edges = [(node_to_idx[u], node_to_idx[v]) for u, v in graph.edges()]
+        weights = [graph[u][v].get("weight", 1.0) for u, v in graph.edges()]
+
+        g_ig = ig.Graph(n=len(nodes), edges=edges, directed=False)
+        g_ig.es["weight"] = weights
+
+        # Run Leiden with ModularityVertexPartition (same as RX Leiden default)
+        partition = leidenalg.find_partition(
+            g_ig, leidenalg.ModularityVertexPartition, weights="weight", seed=42
+        )
+
+        # Convert back to original node IDs
+        communities: list[list[Any]] = []
+        for comm_indices in partition:
+            comm = [idx_to_node[i] for i in comm_indices]
+            communities.append(comm)
+
+        return communities
+    except ImportError as ie:
+        logger.warning(f"  leidenalg or igraph not installed: {ie}")
+        return []
+    except Exception as e:
+        logger.error(f"  Error in leidenalg: {e}", exc_info=True)
+        return []
+
+
 def _process_communities(
-    communities_raw: list[list[Any]] | list[set[Any]], 
-    is_rx_algo: bool, 
-    node_map: dict[Any, int], 
-    needs_relabeling_for_cdlib: bool, 
-    cdlib_node_map_reverse: dict[int, Any] | None
+    communities_raw: list[list[Any]] | list[set[Any]],
+    is_rx_algo: bool,
+    node_map: dict[Any, int],
+    needs_relabeling_for_cdlib: bool,
+    cdlib_node_map_reverse: dict[int, Any] | None,
 ) -> list[set[Any]]:
     """Processes raw communities from algorithms into a list of sets of original node IDs.
 
@@ -422,37 +541,50 @@ def _process_communities(
                         node IDs of a detected community. Filters out empty communities.
     """
     processed_communities: list[set[Any]] = []
-    if communities_raw: # If communities were returned (not empty list from error)
+    if communities_raw:  # If communities were returned (not empty list from error)
         if is_rx_algo:
-            reverse_node_map: dict[int, Any] = {v: k for k, v in node_map.items()} # rx_idx -> original_id
+            reverse_node_map: dict[int, Any] = {
+                v: k for k, v in node_map.items()
+            }  # rx_idx -> original_id
             processed_communities = [
                 {reverse_node_map[node_idx] for node_idx in comm if node_idx in reverse_node_map}
-                for comm in communities_raw if comm # Filter inner empty comms
+                for comm in communities_raw
+                if comm  # Filter inner empty comms
             ]
         elif needs_relabeling_for_cdlib and cdlib_node_map_reverse:
             # communities_raw from NX/cdlib on relabeled graph are sets/lists of integer IDs
             processed_communities = [
-                {cdlib_node_map_reverse[node_idx] for node_idx in comm if node_idx in cdlib_node_map_reverse}
-                for comm in communities_raw if comm # Filter inner empty comms
+                {
+                    cdlib_node_map_reverse[node_idx]
+                    for node_idx in comm
+                    if node_idx in cdlib_node_map_reverse
+                }
+                for comm in communities_raw
+                if comm  # Filter inner empty comms
             ]
-        else: # NX/cdlib on original graph (nodes were already ints or not cdlib)
-            processed_communities = [set(c) for c in communities_raw if c] # Ensure sets and filter empty
-        
-        processed_communities = [c for c in processed_communities if c] # Final filter for any outer empty sets
+        else:  # NX/cdlib on original graph (nodes were already ints or not cdlib)
+            processed_communities = [
+                set(c) for c in communities_raw if c
+            ]  # Ensure sets and filter empty
+
+        processed_communities = [
+            c for c in processed_communities if c
+        ]  # Final filter for any outer empty sets
     return processed_communities
+
 
 def _calculate_and_store_metrics_for_run(
     current_algo_prefix: str,
     processed_communities: list[set[Any]],
-    communities_raw: list[list[Any]] | list[set[Any]], # For rx_modularity
+    communities_raw: list[list[Any]] | list[set[Any]],  # For rx_modularity
     results_dict: dict[str, Any],
     nx_graph_original_ids: nx.Graph,
-    rx_graph: rx.PyGraph, # For rx_modularity
-    node_map: dict[Any, int], # For rx_modularity (unused directly here, but good context)
+    rx_graph: rx.PyGraph,  # For rx_modularity
+    node_map: dict[Any, int],  # For rx_modularity (unused directly here, but good context)
     is_rx_algo: bool,
     dataset_gt: dict[Any, int] | list[int] | None,
     has_ground_truth: bool,
-    rx_weight_fn_for_modularity: Callable[[Any], float] | None = None # Specific for RX modularity
+    rx_weight_fn_for_modularity: Callable[[Any], float] | None = None,  # Specific for RX modularity
 ) -> None:
     """Calculates and stores all relevant metrics for a single algorithm run.
 
@@ -501,20 +633,26 @@ def _calculate_and_store_metrics_for_run(
         if total_num_comms > 0:
             percentage_small_comms = (num_small_comms / total_num_comms) * 100.0
         else:
-            percentage_small_comms = 0.0 # If no communities, 0% are small
+            percentage_small_comms = 0.0  # If no communities, 0% are small
         results_dict[f"{current_algo_prefix}_num_singleton_comms"] = percentage_small_comms
 
     # Modularity
     try:
-        if processed_communities: # Only calculate if there are communities
+        if processed_communities:  # Only calculate if there are communities
             if is_rx_algo:
                 # communities_raw would be list of lists of RX indices
                 # We need to ensure communities_raw is List[List[int]]
                 # The type checker complains because it could be List[Set[Any]].
                 # We can be sure it's List[List[int]] if is_rx_algo is True.
-                rx_comms = communities_raw if isinstance(communities_raw[0], list) else [list(c) for c in communities_raw]
+                rx_comms = (
+                    communities_raw
+                    if isinstance(communities_raw[0], list)
+                    else [list(c) for c in communities_raw]
+                )
                 results_dict[f"{current_algo_prefix}_modularity"] = rx_modularity_calculation(
-                    rx_graph, rx_comms, weight_fn=rx_weight_fn_for_modularity # type: ignore
+                    rx_graph,
+                    rx_comms,
+                    weight_fn=rx_weight_fn_for_modularity,  # type: ignore
                 )
             else:
                 # processed_communities are list of sets of original node IDs
@@ -525,53 +663,101 @@ def _calculate_and_store_metrics_for_run(
         logger.warning(f"Modularity calculation for {current_algo_prefix} failed: {mod_e}")
         results_dict[f"{current_algo_prefix}_modularity"] = float("nan")
 
-
     # Internal Metrics
     try:
         if processed_communities:
             internal_metrics_tuple: tuple[float, ...] = calculate_internal_metrics(
                 nx_graph_original_ids, processed_communities, algorithm_marker=current_algo_prefix
             )
-        else: # No communities, fill with NaNs
-            internal_metrics_tuple = (float("nan"),) * 7 # Conductance, Density, AvgIntDeg, TPR, CutRatio, Surprise, Significance
-        
-        (results_dict[f"{current_algo_prefix}_conductance"],
-         results_dict[f"{current_algo_prefix}_internal_density"],
-         results_dict[f"{current_algo_prefix}_avg_internal_degree"],
-         results_dict[f"{current_algo_prefix}_tpr"],
-         results_dict[f"{current_algo_prefix}_cut_ratio"],
-         results_dict[f"{current_algo_prefix}_surprise"],
-         results_dict[f"{current_algo_prefix}_significance"]) = internal_metrics_tuple
+        else:  # No communities, fill with NaNs
+            internal_metrics_tuple = (
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+            )
+
+        (
+            results_dict[f"{current_algo_prefix}_conductance"],
+            results_dict[f"{current_algo_prefix}_internal_density"],
+            results_dict[f"{current_algo_prefix}_avg_internal_degree"],
+            results_dict[f"{current_algo_prefix}_tpr"],
+            results_dict[f"{current_algo_prefix}_cut_ratio"],
+            results_dict[f"{current_algo_prefix}_surprise"],
+            results_dict[f"{current_algo_prefix}_significance"],
+        ) = internal_metrics_tuple
     except Exception as int_met_e:
         logger.warning(f"Internal metrics for {current_algo_prefix} failed: {int_met_e}")
         # Ensure all internal metrics are NaN if calculation fails
-        for m_key in ["_conductance", "_internal_density", "_avg_internal_degree", "_tpr", "_cut_ratio", "_surprise", "_significance"]:
+        for m_key in [
+            "_conductance",
+            "_internal_density",
+            "_avg_internal_degree",
+            "_tpr",
+            "_cut_ratio",
+            "_surprise",
+            "_significance",
+        ]:
             results_dict[f"{current_algo_prefix}{m_key}"] = float("nan")
 
     # External Metrics (if ground truth available)
     if has_ground_truth and dataset_gt is not None:
         try:
             if processed_communities:
-                ari, nmi, homogeneity, completeness, v_measure, fmi, vi, pw_precision, pw_recall, pw_f1, common_nodes_count = \
-                    compare_with_true_labels(processed_communities, dataset_gt, None, current_algo_prefix) # type: ignore
-                
-                purity_score, purity_nodes = calculate_purity(processed_communities, dataset_gt) # type: ignore
+                (
+                    ari,
+                    nmi,
+                    homogeneity,
+                    completeness,
+                    v_measure,
+                    fmi,
+                    vi,
+                    pw_precision,
+                    pw_recall,
+                    pw_f1,
+                    common_nodes_count,
+                ) = compare_with_true_labels(
+                    processed_communities, dataset_gt, None, current_algo_prefix
+                )  # type: ignore
+
+                purity_score, purity_nodes = calculate_purity(processed_communities, dataset_gt)  # type: ignore
 
                 # Store GCR/PCP for different Jaccard thresholds
                 gcr_pcp_metrics: dict[str, float] = {}
                 for jt in JACCARD_THRESHOLDS_TO_TEST:
                     jt_str: str = str(jt).replace(".", "p")
-                    gcr_val, pcp_val = calculate_cluster_matching_metrics(processed_communities, dataset_gt, jaccard_threshold=jt) # type: ignore
-                    gcr_pcp_metrics[f"{current_algo_prefix}_gcr_jt{jt_str}"] = gcr_val if gcr_val is not None and not np.isnan(gcr_val) else 0.0
-                    gcr_pcp_metrics[f"{current_algo_prefix}_pcp_jt{jt_str}"] = pcp_val if pcp_val is not None and not np.isnan(pcp_val) else 0.0
-            else: # No communities, fill with default values for external metrics
-                ari, nmi, homogeneity, completeness, v_measure, fmi, vi, pw_precision, pw_recall, pw_f1, common_nodes_count = (float("nan"),) * 10 + (0,)
+                    gcr_val, pcp_val = calculate_cluster_matching_metrics(
+                        processed_communities, dataset_gt, jaccard_threshold=jt
+                    )  # type: ignore
+                    gcr_pcp_metrics[f"{current_algo_prefix}_gcr_jt{jt_str}"] = (
+                        gcr_val if gcr_val is not None else float("nan")
+                    )
+                    gcr_pcp_metrics[f"{current_algo_prefix}_pcp_jt{jt_str}"] = (
+                        pcp_val if pcp_val is not None else float("nan")
+                    )
+            else:  # No communities, fill with default values for external metrics
+                (
+                    ari,
+                    nmi,
+                    homogeneity,
+                    completeness,
+                    v_measure,
+                    fmi,
+                    vi,
+                    pw_precision,
+                    pw_recall,
+                    pw_f1,
+                    common_nodes_count,
+                ) = (float("nan"),) * 10 + (0,)
                 purity_score, purity_nodes = float("nan"), 0
                 gcr_pcp_metrics = {}
                 for jt in JACCARD_THRESHOLDS_TO_TEST:
                     jt_str = str(jt).replace(".", "p")
-                    gcr_pcp_metrics[f"{current_algo_prefix}_gcr_jt{jt_str}"] = 0.0
-                    gcr_pcp_metrics[f"{current_algo_prefix}_pcp_jt{jt_str}"] = 0.0
+                    gcr_pcp_metrics[f"{current_algo_prefix}_gcr_jt{jt_str}"] = float("nan")
+                    gcr_pcp_metrics[f"{current_algo_prefix}_pcp_jt{jt_str}"] = float("nan")
 
             results_dict[f"{current_algo_prefix}_ari"] = ari
             results_dict[f"{current_algo_prefix}_nmi"] = nmi
@@ -591,7 +777,19 @@ def _calculate_and_store_metrics_for_run(
         except Exception as ext_met_e:
             logger.warning(f"External metrics for {current_algo_prefix} failed: {ext_met_e}")
             # Ensure all external metrics are NaN/0 if calculation fails
-            for m_key in ["_ari", "_nmi", "_homogeneity", "_completeness", "_v_measure", "_fmi", "_vi", "_pw_precision", "_pw_recall", "_pw_f1", "_purity"]:
+            for m_key in [
+                "_ari",
+                "_nmi",
+                "_homogeneity",
+                "_completeness",
+                "_v_measure",
+                "_fmi",
+                "_vi",
+                "_pw_precision",
+                "_pw_recall",
+                "_pw_f1",
+                "_purity",
+            ]:
                 results_dict[f"{current_algo_prefix}{m_key}"] = float("nan")
             results_dict[f"{current_algo_prefix}_common_nodes"] = 0
             results_dict[f"{current_algo_prefix}_purity_nodes"] = 0
@@ -599,12 +797,12 @@ def _calculate_and_store_metrics_for_run(
                 jt_str = str(jt).replace(".", "p")
                 results_dict[f"{current_algo_prefix}_gcr_jt{jt_str}"] = 0.0
                 results_dict[f"{current_algo_prefix}_pcp_jt{jt_str}"] = 0.0
-    
+
     # Calculate Percentage of Unclustered Nodes
     try:
         total_nodes_in_graph = nx_graph_original_ids.number_of_nodes()
         if total_nodes_in_graph > 0:
-            if not processed_communities: # No communities found
+            if not processed_communities:  # No communities found
                 percentage_unclustered = 100.0
             else:
                 clustered_nodes = set()
@@ -612,32 +810,35 @@ def _calculate_and_store_metrics_for_run(
                     clustered_nodes.update(comm)
                 num_unclustered_nodes = total_nodes_in_graph - len(clustered_nodes)
                 percentage_unclustered = (num_unclustered_nodes / total_nodes_in_graph) * 100.0
-        else: # Empty graph
-            percentage_unclustered = 0.0 # Or float("nan") depending on desired behavior
+        else:  # Empty graph
+            percentage_unclustered = 0.0  # Or float("nan") depending on desired behavior
         results_dict[f"{current_algo_prefix}_unclustered_pct"] = percentage_unclustered
     except Exception as unclust_e:
-        logger.warning(f"Unclustered percentage calculation for {current_algo_prefix} failed: {unclust_e}")
+        logger.warning(
+            f"Unclustered percentage calculation for {current_algo_prefix} failed: {unclust_e}"
+        )
         results_dict[f"{current_algo_prefix}_unclustered_pct"] = float("nan")
 
     # Overall Score - calculated regardless of whether communities were found (will use NaNs/0s)
     overall_score: float = calculate_overall_score(results_dict, current_algo_prefix)
     results_dict[f"{current_algo_prefix}_overall_score"] = overall_score
 
+
 def _run_single_algorithm_config(
-    algo_runner_func: Callable[..., tuple[list[list[Any]] | list[set[Any]], float]]
-    , run_args: dict[str, Any]
-    , graph_to_run_on: rx.PyGraph | nx.Graph
-    , current_algo_prefix: str
-    , is_rx_algo: bool
-    , results_for_current_dataset: dict[str, Any]
-    , node_map: dict[Any, int]
-    , needs_relabeling_for_cdlib: bool
-    , cdlib_node_map_reverse: dict[int, Any] | None
-    , nx_graph_original_ids: nx.Graph
-    , rx_graph: rx.PyGraph
-    , dataset_gt: dict[Any, int] | list[int] | None
-    , has_ground_truth: bool
-    , rx_specific_weight_fn_for_modularity: Callable[[Any], float] | None = None
+    algo_runner_func: Callable[..., tuple[list[list[Any]] | list[set[Any]], float]],
+    run_args: dict[str, Any],
+    graph_to_run_on: rx.PyGraph | nx.Graph,
+    current_algo_prefix: str,
+    is_rx_algo: bool,
+    results_for_current_dataset: dict[str, Any],
+    node_map: dict[Any, int],
+    needs_relabeling_for_cdlib: bool,
+    cdlib_node_map_reverse: dict[int, Any] | None,
+    nx_graph_original_ids: nx.Graph,
+    rx_graph: rx.PyGraph,
+    dataset_gt: dict[Any, int] | list[int] | None,
+    has_ground_truth: bool,
+    rx_specific_weight_fn_for_modularity: Callable[[Any], float] | None = None,
 ) -> None:
     """Runs a single algorithm configuration, processes its communities, and calculates all metrics.
 
@@ -676,47 +877,54 @@ def _run_single_algorithm_config(
             Specific weight function for RX modularity, if needed. Defaults to None.
     """
     logger.info(f"Running {current_algo_prefix}...")
-    
+
     start_time: float = time.time()
     communities_raw: list[list[Any]] | list[set[Any]]
     mem_usage: float
     communities_raw, mem_usage = algo_runner_func(graph_to_run_on, **run_args)
-    
+
     results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = time.time() - start_time
     results_for_current_dataset[f"{current_algo_prefix}_memory"] = mem_usage
 
     processed_communities: list[set[Any]] = _process_communities(
         communities_raw, is_rx_algo, node_map, needs_relabeling_for_cdlib, cdlib_node_map_reverse
     )
-    
+
     num_pred_comms: int = len(processed_communities)
-    results_for_current_dataset[f"{current_algo_prefix}_num_comms"] = num_pred_comms # Stored here, also in _calculate_and_store
-    
-    logger.info(f"{current_algo_prefix}: {num_pred_comms} communities "
-          f"in {format_time(results_for_current_dataset[f'{current_algo_prefix}_elapsed'])} "
-          f"using {format_memory(results_for_current_dataset[f'{current_algo_prefix}_memory'])}")
+    results_for_current_dataset[f"{current_algo_prefix}_num_comms"] = (
+        num_pred_comms  # Stored here, also in _calculate_and_store
+    )
+
+    logger.info(
+        f"{current_algo_prefix}: {num_pred_comms} communities "
+        f"in {format_time(results_for_current_dataset[f'{current_algo_prefix}_elapsed'])} "
+        f"using {format_memory(results_for_current_dataset[f'{current_algo_prefix}_memory'])}"
+    )
 
     actual_rx_weight_fn_modularity: Callable[[Any], float] | None = None
     if is_rx_algo:
+
         def _rx_lpa_weighted_edge_weight(edge: Any) -> float:
             return float(edge)
+
         def _rx_unweighted_edge_weight(edge: Any) -> float:
             return 1.0
+
         def _rx_generic_edge_weight(edge: Any) -> float:
             return float(edge)
 
         if current_algo_prefix.startswith("rx_lpa_weighted"):
             actual_rx_weight_fn_modularity = _rx_lpa_weighted_edge_weight
         elif current_algo_prefix.startswith("rx_lpa_unweighted"):
-             actual_rx_weight_fn_modularity = _rx_unweighted_edge_weight
+            actual_rx_weight_fn_modularity = _rx_unweighted_edge_weight
         elif current_algo_prefix.startswith("rx_louvain") or current_algo_prefix.startswith("rx_leiden"):
-             actual_rx_weight_fn_modularity = _rx_generic_edge_weight
+            actual_rx_weight_fn_modularity = _rx_generic_edge_weight
         # Add other rx algos here if needed
 
     _calculate_and_store_metrics_for_run(
         current_algo_prefix=current_algo_prefix,
         processed_communities=processed_communities,
-        communities_raw=communities_raw, 
+        communities_raw=communities_raw,
         results_dict=results_for_current_dataset,
         nx_graph_original_ids=nx_graph_original_ids,
         rx_graph=rx_graph,
@@ -724,16 +932,17 @@ def _run_single_algorithm_config(
         is_rx_algo=is_rx_algo,
         dataset_gt=dataset_gt,
         has_ground_truth=has_ground_truth,
-        rx_weight_fn_for_modularity=actual_rx_weight_fn_modularity
+        rx_weight_fn_for_modularity=actual_rx_weight_fn_modularity,
     )
 
+
 def initialize_results_dict(
-    dataset_name: str
-    , num_nodes: int = 0
-    , num_edges: int = 0
-    , has_ground_truth: bool = False
-    , num_gt_clusters: int = 0
-    , num_nodes_in_gt: int = 0
+    dataset_name: str,
+    num_nodes: int = 0,
+    num_edges: int = 0,
+    has_ground_truth: bool = False,
+    num_gt_clusters: int = 0,
+    num_nodes_in_gt: int = 0,
 ) -> dict[str, Any]:
     """Initializes the results dictionary with all necessary keys.
 
@@ -759,50 +968,61 @@ def initialize_results_dict(
                         placeholders (NaN, 0, or None) for all anticipated metrics.
     """
     results: dict[str, Any] = {
-        mp["key"]: None for mp in ORDERED_METRIC_PROPERTIES 
-        if mp["type"] == "info" and mp["key"] not in ["dataset", "nodes", "edges", "num_gt_clusters", "num_nodes_in_gt", "algorithm_name"]
+        mp["key"]: None
+        for mp in ORDERED_METRIC_PROPERTIES
+        if mp["type"] == "info"
+        and mp["key"]
+        not in ["dataset", "nodes", "edges", "num_gt_clusters", "num_nodes_in_gt", "algorithm_name"]
     }
-    results.update({
-        "dataset": dataset_name, "nodes": num_nodes, "edges": num_edges,
-        "has_ground_truth": has_ground_truth, 
-        "num_gt_clusters": num_gt_clusters,
-        "num_nodes_in_gt": num_nodes_in_gt
-    })
+    results.update(
+        {
+            "dataset": dataset_name,
+            "nodes": num_nodes,
+            "edges": num_edges,
+            "has_ground_truth": has_ground_truth,
+            "num_gt_clusters": num_gt_clusters,
+            "num_nodes_in_gt": num_nodes_in_gt,
+        }
+    )
 
-    algo_prefixes_to_initialize: list[str] = [algo_conf["prefix"] for algo_conf in ALGORITHMS_CONFIG_STRUCTURE]
+    algo_prefixes_to_initialize: list[str] = [
+        algo_conf["prefix"] for algo_conf in ALGORITHMS_CONFIG_STRUCTURE
+    ]
 
     default_values: dict[str, Any] = {
-        "perf": 0.0, 
-        "structure": 0, 
+        "perf": 0.0,
+        "structure": 0,
         "internal": float("nan"),
         "external": float("nan"),
-        "summary": float("nan") 
+        "summary": float("nan"),
     }
     specific_key_defaults: dict[str, Any] = {
         "_common_nodes": 0,
         "_num_comms": 0,
         "_num_singleton_comms": 0,
-        "_purity_nodes": 0, 
+        "_purity_nodes": 0,
         "_unclustered_pct": float("nan"),
     }
-    for jt_key_part in [f"_gcr_jt{str(jt).replace('.','p')}" for jt in JACCARD_THRESHOLDS_TO_TEST] + \
-                       [f"_pcp_jt{str(jt).replace('.','p')}" for jt in JACCARD_THRESHOLDS_TO_TEST]:
+    for jt_key_part in [f"_gcr_jt{str(jt).replace('.', 'p')}" for jt in JACCARD_THRESHOLDS_TO_TEST] + [
+        f"_pcp_jt{str(jt).replace('.', 'p')}" for jt in JACCARD_THRESHOLDS_TO_TEST
+    ]:
         specific_key_defaults[jt_key_part] = 0.0
-
 
     for algo_prefix in algo_prefixes_to_initialize:
         for metric_prop in ORDERED_METRIC_PROPERTIES:
             metric_key_suffix: str = metric_prop["key"]
             metric_type: str = metric_prop["type"]
-            
+
             if metric_type == "info":
                 continue
 
             full_metric_key: str = f"{algo_prefix}{metric_key_suffix}"
-            
-            default_val: Any = specific_key_defaults.get(metric_key_suffix, default_values.get(metric_type, float("nan")))
+
+            default_val: Any = specific_key_defaults.get(
+                metric_key_suffix, default_values.get(metric_type, float("nan"))
+            )
             results[full_metric_key] = default_val
-            
+
     return results
 
 
@@ -853,7 +1073,6 @@ def run_benchmark_on_dataset(
             "Graph Edges GT Clusters",
             "Graph Edges LLM Clusters",
             "Graph Edges No GT",
-            "Wiki News Sim",
         }
 
         if dataset_name in dict_based_loaders:
@@ -893,38 +1112,50 @@ def run_benchmark_on_dataset(
         num_gt_clusters: int = dataset_info.get("num_gt_clusters", 0)
         num_nodes_in_gt: int = dataset_info.get("num_nodes_in_gt", 0) if has_ground_truth else 0
 
+        # Align ground-truth labels to original node IDs so external metrics work even when
+        # nodes are non-integer (e.g., Davis/Florentine string node IDs). When loaders return
+        # a list/array, its order follows the graph node iteration order; convert to a dict
+        # keyed by the original node objects to match `processed_communities`.
+        if has_ground_truth and isinstance(dataset_gt, (list, np.ndarray)):
+            nodes_order = list(nx_graph_original_ids.nodes())
+            if len(dataset_gt) == len(nodes_order):
+                dataset_gt = {node_id: label for node_id, label in zip(nodes_order, dataset_gt)}
+
         results_for_current_dataset = initialize_results_dict(
-            dataset_name, num_nodes, num_edges, 
-            has_ground_truth, num_gt_clusters, num_nodes_in_gt
+            dataset_name, num_nodes, num_edges, has_ground_truth, num_gt_clusters, num_nodes_in_gt
         )
 
     except FileNotFoundError as fnf_error:
         logger.error(f"  ❌ Critical Error: Dataset file not found for {dataset_name} - {fnf_error}")
         # Initialize a minimal dict for error reporting if not already done
-        if not results_for_current_dataset: results_for_current_dataset = {"dataset": dataset_name}
+        if not results_for_current_dataset:
+            results_for_current_dataset = {"dataset": dataset_name}
         results_for_current_dataset["error"] = f"File not found: {fnf_error}"
         return results_for_current_dataset
     except Exception as e_load:
         logger.exception(f"  ❌ Critical Error loading {dataset_name}: {str(e_load)}")
-        if not results_for_current_dataset: results_for_current_dataset = {"dataset": dataset_name}
+        if not results_for_current_dataset:
+            results_for_current_dataset = {"dataset": dataset_name}
         results_for_current_dataset["error"] = f"Load error: {str(e_load)}"
         return results_for_current_dataset
 
     # Ensure nx_graph_original_ids is not None before proceeding
-    if nx_graph_original_ids is None: # Should have been caught by earlier checks
-        logger.error(f"  Critical error: nx_graph_original_ids is None for {dataset_name} after load attempt.")
-        if not results_for_current_dataset: results_for_current_dataset = {"dataset": dataset_name}
+    if nx_graph_original_ids is None:  # Should have been caught by earlier checks
+        logger.error(
+            f"  Critical error: nx_graph_original_ids is None for {dataset_name} after load attempt."
+        )
+        if not results_for_current_dataset:
+            results_for_current_dataset = {"dataset": dataset_name}
         results_for_current_dataset["error"] = "Graph object is None after loading."
         return results_for_current_dataset
 
-
     rx_graph: rx.PyGraph
     node_map: dict[Any, int]
-    rx_graph, node_map = convert_nx_to_rx(nx_graph_original_ids) 
+    rx_graph, node_map = convert_nx_to_rx(nx_graph_original_ids)
     graph_for_nx_cdlib: nx.Graph = nx.Graph(nx_graph_original_ids)
 
     needs_relabeling_for_cdlib: bool = False
-    cdlib_node_map_reverse: dict[int, Any] | None = None 
+    cdlib_node_map_reverse: dict[int, Any] | None = None
     original_nodes_for_nx_cdlib: list[Any] = list(graph_for_nx_cdlib.nodes())
 
     if graph_for_nx_cdlib.nodes():
@@ -944,8 +1175,26 @@ def run_benchmark_on_dataset(
         }
         graph_for_nx_cdlib_eff = graph_for_nx_cdlib_relabeled
     else:
-        graph_for_nx_cdlib_eff = graph_for_nx_cdlib 
-    
+        graph_for_nx_cdlib_eff = graph_for_nx_cdlib
+
+    # Build adjacency list from graph_for_nx_cdlib_eff (the graph NX actually runs on)
+    # This is critical because even nx.Graph(g) creates a copy with different adjacency order!
+    # For RX algorithms, we need to map node IDs to RX indices via node_map.
+    nx_adjacency: list[list[int]] = []
+    if needs_relabeling_for_cdlib and cdlib_node_map_reverse is not None:
+        # When relabeled: adjacency[i] should have neighbors of relabeled node i
+        # Convert back to original IDs, then to RX indices
+        for relabeled_node in graph_for_nx_cdlib_eff.nodes():
+            neighbors_relabeled = list(graph_for_nx_cdlib_eff[relabeled_node].keys())
+            neighbors_rx = [node_map[cdlib_node_map_reverse[nbr]] for nbr in neighbors_relabeled]
+            nx_adjacency.append(neighbors_rx)
+    else:
+        # No relabeling: but still use graph_for_nx_cdlib_eff (the copy NX runs on)
+        # because nx.Graph() copy can have different adjacency order than original!
+        for node in graph_for_nx_cdlib_eff.nodes():
+            neighbors = [node_map[nbr] for nbr in graph_for_nx_cdlib_eff[node].keys()]
+            nx_adjacency.append(neighbors)
+
     default_weight: float = 1.0
     for u, v, data in graph_for_nx_cdlib_eff.edges(data=True):
         if "weight" not in data or data["weight"] is None:
@@ -954,41 +1203,66 @@ def run_benchmark_on_dataset(
     for algo_config in ALGORITHMS_CONFIG_STRUCTURE:
         current_algo_prefix: str = algo_config["prefix"]
         runner_name: str = algo_config["runner_name"]
-        run_args: dict[str, Any] = algo_config["run_args"]
+        run_args: dict[str, Any] = algo_config["run_args"].copy()  # Copy to avoid mutation
         is_rx: bool = algo_config["is_rx"]
-        algo_display_name: str = algo_config["name"] 
+        algo_display_name: str = algo_config["name"]
+        needs_adjacency: bool = algo_config.get("needs_adjacency", False)
 
-        logger.info(f"\n--- Processing {results_for_current_dataset['dataset']} with {algo_display_name} ---")
+        # If algorithm needs adjacency for exact NX matching, add it to run_args
+        if needs_adjacency and is_rx:
+            run_args["adjacency"] = nx_adjacency
+
+        logger.info(
+            f"\n--- Processing {results_for_current_dataset['dataset']} with {algo_display_name} ---"
+        )
 
         # Skip NetworkX algorithms for very large datasets (> 1M edges) as they are too slow
         if not is_rx and num_edges > LARGE_EDGES_THRESHOLD:
-            logger.warning(f"  Skipping {algo_display_name} for large graph ({num_edges} edges > {LARGE_EDGES_THRESHOLD:,}) - NetworkX too slow, using only RustWorkX")
-            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = -1 
+            logger.warning(
+                f"  Skipping {algo_display_name} for large graph ({num_edges} edges > {LARGE_EDGES_THRESHOLD:,}) - NetworkX too slow, using only RustWorkX"
+            )
+            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = -1
             _calculate_and_store_metrics_for_run(
                 current_algo_prefix=current_algo_prefix,
-                processed_communities=[], communities_raw=[], results_dict=results_for_current_dataset,
-                nx_graph_original_ids=nx_graph_original_ids, rx_graph=rx_graph, node_map=node_map,
-                is_rx_algo=is_rx, dataset_gt=dataset_gt, has_ground_truth=has_ground_truth, # type: ignore
-                rx_weight_fn_for_modularity=None
+                processed_communities=[],
+                communities_raw=[],
+                results_dict=results_for_current_dataset,
+                nx_graph_original_ids=nx_graph_original_ids,
+                rx_graph=rx_graph,
+                node_map=node_map,
+                is_rx_algo=is_rx,
+                dataset_gt=dataset_gt,
+                has_ground_truth=has_ground_truth,  # type: ignore
+                rx_weight_fn_for_modularity=None,
             )
             continue
-            
+
         # Skip NetworkX LPA for large node count graphs (original check)
-        if current_algo_prefix == "nx_lpa" and num_nodes > LARGE_GRAPH_THRESHOLD: # type: ignore
-            logger.warning(f"  Skipping {algo_display_name} for large graph ({num_nodes} nodes > {LARGE_GRAPH_THRESHOLD})") # type: ignore
-            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = -1 
+        if current_algo_prefix == "nx_lpa" and num_nodes > LARGE_GRAPH_THRESHOLD:  # type: ignore
+            logger.warning(
+                f"  Skipping {algo_display_name} for large graph ({num_nodes} nodes > {LARGE_GRAPH_THRESHOLD})"
+            )  # type: ignore
+            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = -1
             _calculate_and_store_metrics_for_run(
                 current_algo_prefix=current_algo_prefix,
-                processed_communities=[], communities_raw=[], results_dict=results_for_current_dataset,
-                nx_graph_original_ids=nx_graph_original_ids, rx_graph=rx_graph, node_map=node_map,
-                is_rx_algo=is_rx, dataset_gt=dataset_gt, has_ground_truth=has_ground_truth, # type: ignore
-                rx_weight_fn_for_modularity=None
+                processed_communities=[],
+                communities_raw=[],
+                results_dict=results_for_current_dataset,
+                nx_graph_original_ids=nx_graph_original_ids,
+                rx_graph=rx_graph,
+                node_map=node_map,
+                is_rx_algo=is_rx,
+                dataset_gt=dataset_gt,
+                has_ground_truth=has_ground_truth,  # type: ignore
+                rx_weight_fn_for_modularity=None,
             )
             continue
-        
+
         try:
-            algo_runner_func: Callable[..., tuple[list[list[Any]] | list[set[Any]], float]] = _get_runner_function_by_name(runner_name) # type: ignore
-            
+            algo_runner_func: Callable[..., tuple[list[list[Any]] | list[set[Any]], float]] = (
+                _get_runner_function_by_name(runner_name)
+            )  # type: ignore
+
             _run_single_algorithm_config(
                 algo_runner_func=algo_runner_func,
                 run_args=run_args,
@@ -1002,40 +1276,56 @@ def run_benchmark_on_dataset(
                 nx_graph_original_ids=nx_graph_original_ids,
                 rx_graph=rx_graph,
                 dataset_gt=dataset_gt,
-                has_ground_truth=has_ground_truth # type: ignore
+                has_ground_truth=has_ground_truth,  # type: ignore
             )
-        except Exception as e: 
+        except Exception as e:
             logger.exception(f"  Error running {algo_display_name} ({current_algo_prefix}): {str(e)}")
-            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = results_for_current_dataset.get(f"{current_algo_prefix}_elapsed", 0) # type: ignore
-            results_for_current_dataset[f"{current_algo_prefix}_memory"] = results_for_current_dataset.get(f"{current_algo_prefix}_memory", 0) # type: ignore
+            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = (
+                results_for_current_dataset.get(f"{current_algo_prefix}_elapsed", 0)
+            )  # type: ignore
+            results_for_current_dataset[f"{current_algo_prefix}_memory"] = (
+                results_for_current_dataset.get(f"{current_algo_prefix}_memory", 0)
+            )  # type: ignore
             _calculate_and_store_metrics_for_run(
                 current_algo_prefix=current_algo_prefix,
-                processed_communities=[], communities_raw=[], results_dict=results_for_current_dataset,
-                nx_graph_original_ids=nx_graph_original_ids, rx_graph=rx_graph, node_map=node_map,
-                is_rx_algo=is_rx, dataset_gt=dataset_gt, has_ground_truth=has_ground_truth, # type: ignore
-                rx_weight_fn_for_modularity=None
+                processed_communities=[],
+                communities_raw=[],
+                results_dict=results_for_current_dataset,
+                nx_graph_original_ids=nx_graph_original_ids,
+                rx_graph=rx_graph,
+                node_map=node_map,
+                is_rx_algo=is_rx,
+                dataset_gt=dataset_gt,
+                has_ground_truth=has_ground_truth,  # type: ignore
+                rx_weight_fn_for_modularity=None,
             )
 
     if len(RESOLUTIONS_TO_TEST) > 1:
-        default_res_for_diag: float = RESOLUTIONS_TO_TEST[1] 
+        default_res_for_diag: float = RESOLUTIONS_TO_TEST[1]
         default_res_str: str = str(default_res_for_diag).replace(".", "p")
         test_prefix: str = f"nx_louvain_res{default_res_str}"
         logger.debug(f"\nDEBUG: Sample Parameterized Algo ({test_prefix}) results snippet:")
         for k, v in results_for_current_dataset.items():
-            if k.startswith(test_prefix) and any(suffix in k for suffix in ["_elapsed", "_memory", "_num_comms", "_ari", "_modularity"]):
+            if k.startswith(test_prefix) and any(
+                suffix in k for suffix in ["_elapsed", "_memory", "_num_comms", "_ari", "_modularity"]
+            ):
                 logger.debug(f"  {k}: {v}")
         logger.debug("DEBUG: End of sample snippet.\n")
 
     logger.info(f"\nFinished benchmark for {dataset_name}.")
     return results_for_current_dataset
 
+
 def main() -> None:
     """Main function to run the benchmark.
 
     Initializes logging and calls `run_benchmark()`.
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", force=True)
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", force=True
+    )
     run_benchmark()
+
 
 if __name__ == "__main__":
     main()

@@ -247,9 +247,7 @@ class TestIsomorphic(unittest.TestCase):
         second_graph = rustworkx.PyDiGraph()
         second_graph.add_nodes_from([0])
         second_graph.add_edges_from([(0, 0, "b")])
-        self.assertFalse(
-            rustworkx.is_isomorphic(graph, second_graph, edge_matcher=lambda x, y: x == y)
-        )
+        self.assertFalse(rustworkx.is_isomorphic(graph, second_graph, edge_matcher=lambda x, y: x == y))
 
     def test_digraph_non_isomorphic_rule_out_incoming(self):
         graph = rustworkx.PyDiGraph()

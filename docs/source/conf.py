@@ -28,20 +28,21 @@ version = "0.17"
 # The full version, including alpha/beta/rc tags.
 release = "0.17.1"
 
-extensions = ["sphinx.ext.autodoc",
-              "sphinx.ext.autosummary",
-              "sphinx.ext.viewcode",
-              "sphinx.ext.extlinks",
-              "sphinx.ext.todo",
-              "sphinx.ext.viewcode",
-              "m2r2",
-              "jupyter_sphinx",
-              "reno.sphinxext",
-              "sphinx.ext.intersphinx",
-              "sphinxemoji.sphinxemoji",
-              "sphinx_reredirects",
-              "qiskit_sphinx_theme",
-             ]
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.extlinks",
+    "sphinx.ext.todo",
+    "sphinx.ext.viewcode",
+    "m2r2",
+    "jupyter_sphinx",
+    "reno.sphinxext",
+    "sphinx.ext.intersphinx",
+    "sphinxemoji.sphinxemoji",
+    "sphinx_reredirects",
+    "qiskit_sphinx_theme",
+]
 templates_path = ["_templates"]
 extra_css_files = ["overrides.css"]
 
@@ -61,12 +62,14 @@ master_doc = "index"
 autosummary_generate = True
 autosummary_generate_overwrite = False
 autoclass_content = "both"
-autodoc_typehints = "none" # disabled until https://github.com/Qiskit/qiskit_sphinx_theme/issues/21 is fixed
+autodoc_typehints = (
+    "none"  # disabled until https://github.com/Qiskit/qiskit_sphinx_theme/issues/21 is fixed
+)
 
 # Intersphinx configuration
 intersphinx_mapping = {
     "matplotlib": ("https://matplotlib.org/stable/", None),
-    "numpy": ("http://docs.scipy.org/doc/numpy/", None)
+    "numpy": ("http://docs.scipy.org/doc/numpy/", None),
 }
 
 # Prepend warning for development docs:
@@ -104,8 +107,7 @@ html_theme_options = {
 # Latex options
 latex_elements = {}
 latex_documents = [
-  ("index", "rustworkx.tex", "rustworkx Documentation",
-   "rustworkx Contributors", "manual"),
+    ("index", "rustworkx.tex", "rustworkx Documentation", "rustworkx Contributors", "manual"),
 ]
 
 # Jupyter Sphinx options
@@ -114,9 +116,15 @@ jupyter_execute_default_kernel = "python3"
 # Texinfo options
 
 texinfo_documents = [
-  ("index", "rustworkx", "rustworkx Documentation",
-   "rustworkx Contributors", "rustworkx", "",
-   "Miscellaneous"),
+    (
+        "index",
+        "rustworkx",
+        "rustworkx Documentation",
+        "rustworkx Contributors",
+        "rustworkx",
+        "",
+        "Miscellaneous",
+    ),
 ]
 
 redirects = {}
@@ -131,20 +139,18 @@ if os.getenv("RUSTWORKX_LEGACY_DOCS", None) is not None:
 
 # Version extensions
 
+
 def _get_versions(app, config):
     context = config.html_context
     start_version = (0, 12, 0)
-    proc = subprocess.run(["git", "describe", "--abbrev=0"],
-                          capture_output=True)
+    proc = subprocess.run(["git", "describe", "--abbrev=0"], capture_output=True)
     proc.check_returncode()
     current_version = proc.stdout.decode("utf8")
     current_version_info = current_version.split(".")
     if current_version_info[0] == "0":
-        version_list = [
-            "0.%s" % x for x in range(start_version[1],
-                                      int(current_version_info[1]) + 1)]
+        version_list = ["0.%s" % x for x in range(start_version[1], int(current_version_info[1]) + 1)]
     else:
-        #TODO: When 1.0.0 add code to handle 0.x version list
+        # TODO: When 1.0.0 add code to handle 0.x version list
         version_list = []
         pass
     context["version_list"] = version_list
@@ -157,6 +163,7 @@ def _get_version_label(current_version):
         return ".".join(current_version_info[:-1])
     else:
         return "Development"
+
 
 def avoid_duplicate_in_dispatch(app, obj, bound_method):
     if hasattr(obj, "dispatch") and hasattr(obj, "register") and obj.dispatch.__module__ == "functools":

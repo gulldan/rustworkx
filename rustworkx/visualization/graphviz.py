@@ -11,8 +11,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import io
-from typing import TypeVar, cast, TYPE_CHECKING
-from collections.abc import Callable
+from typing import TypeVar, Callable, cast, TYPE_CHECKING
 
 from rustworkx import PyDiGraph, PyGraph
 

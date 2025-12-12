@@ -103,15 +103,11 @@ class TestGraphColoring(unittest.TestCase):
             self.assertEqual({a: 0, b: 1, c: 1, d: 1, e: 2, f: 0, g: 1, h: 1}, res)
 
         with self.subTest(strategy=rustworkx.ColoringStrategy.Saturation):
-            res = rustworkx.graph_greedy_color(
-                graph, strategy=rustworkx.ColoringStrategy.Saturation
-            )
+            res = rustworkx.graph_greedy_color(graph, strategy=rustworkx.ColoringStrategy.Saturation)
             self.assertEqual({a: 0, b: 1, c: 1, d: 1, e: 0, f: 1, g: 0, h: 0}, res)
 
         with self.subTest(strategy=rustworkx.ColoringStrategy.IndependentSet):
-            res = rustworkx.graph_greedy_color(
-                graph, strategy=rustworkx.ColoringStrategy.IndependentSet
-            )
+            res = rustworkx.graph_greedy_color(graph, strategy=rustworkx.ColoringStrategy.IndependentSet)
             self.assertEqual({a: 0, b: 1, c: 1, d: 1, e: 0, f: 1, g: 0, h: 0}, res)
 
 

@@ -9,9 +9,11 @@ deps = nox.project.dependency_groups(pyproject, "test")
 lint_deps = nox.project.dependency_groups(pyproject, "lint")
 stubs_deps = nox.project.dependency_groups(pyproject, "stubs")
 
+
 def install_rustworkx(session):
     session.install(*deps)
     session.install(".[all]", "-c", "constraints.txt")
+
 
 # We define a common base such that -e test triggers a test with the current
 # Python version of the interpreter and -e test_with_version launches
@@ -21,13 +23,16 @@ def base_test(session):
     session.chdir("tests")
     session.run("stestr", "run", *session.posargs)
 
+
 @nox.session(python=["3"])
 def test(session):
     base_test(session)
 
+
 @nox.session(python=["3.9", "3.10", "3.11", "3.12"])
 def test_with_version(session):
     base_test(session)
+
 
 @nox.session(python=["3"])
 def lint(session):
@@ -38,6 +43,7 @@ def lint(session):
     session.run("cargo", "fmt", "--all", "--", "--check", external=True)
     session.run("python", "tools/find_stray_release_notes.py")
 
+
 # For uv environments, we keep the virtualenvs separate to avoid conflicts
 @nox.session(python=["3"], venv_backend="uv", reuse_venv=False, default=False)
 def docs(session):
@@ -47,9 +53,7 @@ def docs(session):
     session.env["SETUPTOOLS_RUST_CARGO_PROFILE"] = "dev"
     session.run("uv", "sync", "--only-group", "docs")
     session.install(".")
-    session.run(
-        "uv", "run", "--", "python", "-m", "ipykernel", "install", "--user"
-    )
+    session.run("uv", "run", "--", "python", "-m", "ipykernel", "install", "--user")
     session.run("uv", "run", "jupyter", "kernelspec", "list")
     session.chdir("docs")
     session.run(
@@ -66,21 +70,25 @@ def docs(session):
         *session.posargs,
     )
 
+
 @nox.session(python=["3"], default=False)
 def docs_clean(session):
     session.chdir("docs")
     session.run("rm", "-rf", "build", "source/apiref", external=True)
+
 
 @nox.session(python=["3"])
 def black(session):
     session.install(*[d for d in lint_deps if "black" in d])
     session.run("black", "rustworkx", "tests", "retworkx", *session.posargs)
 
+
 @nox.session(python=["3"])
 def typos(session):
     session.install(*[d for d in lint_deps if "typos" in d])
     session.run("typos", "--exclude", "releasenotes")
     session.run("typos", "--no-check-filenames", "releasenotes")
+
 
 @nox.session(python=["3"])
 def stubs(session):

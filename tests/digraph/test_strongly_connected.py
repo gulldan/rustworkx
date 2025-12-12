@@ -133,9 +133,7 @@ class TestCondensation(unittest.TestCase):
         condensed_graph = rustworkx.condensation(self.graph)
 
         # Check the number of nodes (two cycles should be condensed into one node each)
-        self.assertEqual(
-            len(condensed_graph.node_indices()), 2
-        )  # [SCC(a, b, c, d), SCC(e, f, g, h)]
+        self.assertEqual(len(condensed_graph.node_indices()), 2)  # [SCC(a, b, c, d), SCC(e, f, g, h)]
 
         # Check the number of edges
         self.assertEqual(

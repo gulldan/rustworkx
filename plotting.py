@@ -522,6 +522,17 @@ def generate_results_table(benchmark_results: BenchmarkResultsList) -> str:
                         )
                     # --- END DEBUG PRINT ---
 
+                    # Force N/A for GCR/PCP when GT has <=1 cluster (metric not meaningful)
+                    if col_key_md.startswith("_gcr_jt") or col_key_md.startswith("_pcp_jt"):
+                        try:
+                            gt_clusters_val = int(dataset_info_values_map.get("num_gt_clusters", "0"))
+                        except ValueError:
+                            gt_clusters_val = 0
+                        if gt_clusters_val <= 1:
+                            formatted_cell_value = "N/A"
+                            current_md_row_cells.append(formatted_cell_value)
+                            continue
+
                     if is_skipped_this_algo_run and col_key_md not in ["_elapsed", "_memory"]:
                         formatted_cell_value = "SKIPPED"
                     elif raw_metric_val_md is not None:
@@ -689,7 +700,6 @@ def generate_results_table_matplotlib(
             for metric_prop_col_mpl in ORDERED_METRIC_PROPERTIES:
                 col_key_suffix_mpl: str = metric_prop_col_mpl["key"]
                 text_for_cell: str = "N/A"
-                is_cell_na: bool = True  # Assume NA unless a value is found
                 is_cell_skipped: bool = False
 
                 if metric_prop_col_mpl["type"] == "info":
@@ -698,7 +708,6 @@ def generate_results_table_matplotlib(
                         if col_key_suffix_mpl == "algorithm_name"
                         else str(dataset_res_item_mpl.get(col_key_suffix_mpl, "N/A"))
                     )
-                    is_cell_na = text_for_cell == "N/A"
                 else:
                     full_metric_data_key: str = f"{algo_prefix_key_mpl}{col_key_suffix_mpl}"
                     raw_metric_val_for_cell: Any = dataset_res_item_mpl.get(full_metric_data_key)
@@ -723,7 +732,6 @@ def generate_results_table_matplotlib(
                             text_for_cell = "SKIPPED"
                             is_cell_skipped = True
                         else:
-                            is_cell_na = False  # Has a valid value
                             formatter_name_mpl: str | None = metric_prop_col_mpl.get("format_func")
                             actual_formatter_mpl: Callable[[Any], str] | None = (
                                 FORMATTER_FUNCTIONS.get(formatter_name_mpl)

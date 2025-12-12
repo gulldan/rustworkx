@@ -35,9 +35,7 @@ class TestBellmanFordGraph(unittest.TestCase):
         self.graph.add_edge(self.e, self.f, 6)
 
     def test_bellman_ford(self):
-        path = rustworkx.graph_bellman_ford_shortest_path_lengths(
-            self.graph, self.a, lambda x: float(x)
-        )
+        path = rustworkx.graph_bellman_ford_shortest_path_lengths(self.graph, self.a, lambda x: float(x))
         path_dijkstra = rustworkx.graph_dijkstra_shortest_path_lengths(
             self.graph, self.a, lambda x: float(x)
         )

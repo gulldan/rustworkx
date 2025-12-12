@@ -11,7 +11,7 @@
 // limitations under the License.
 // Bron, C.; Kerbosch, J. (1973). "Algorithm 457: finding all cliques of an undirected graph". Communications of the ACM. 16 (9): 575–577. doi:10.1145/362342.362367.
 
-use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
+use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use petgraph::graph::NodeIndex;
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -39,13 +39,13 @@ const MAX_NODES_FOR_BITSET: usize = 64;
 ///     A list of cliques, where each clique is represented as a list of nodes.
 #[pyfunction]
 #[pyo3(signature = (graph, /), text_signature = "(graph, /)")]
-pub fn find_maximal_cliques(py: Python, graph: PyObject) -> PyResult<Vec<Vec<usize>>> {
-    let graph_ref = match graph.extract::<PyRef<PyGraph>>(py) {
+pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<usize>>> {
+    let graph_ref = match graph.bind(py).extract::<PyRef<PyGraph>>() {
         Ok(graph) => graph,
         Err(_) => {
             return Err(PyTypeError::new_err(
                 "Input graph must be a PyGraph instance.",
-            ))
+            ));
         }
     };
     let node_count = graph_ref.graph.node_count();

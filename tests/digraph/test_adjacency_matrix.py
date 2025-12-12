@@ -139,9 +139,7 @@ class TestDAGAdjacencyMatrix(unittest.TestCase):
 
     def test_random_graph_different_dtype_astype_no_copy(self):
         input_matrix = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.int64)
-        graph = rustworkx.PyDiGraph.from_adjacency_matrix(
-            input_matrix.astype(np.float64, copy=False)
-        )
+        graph = rustworkx.PyDiGraph.from_adjacency_matrix(input_matrix.astype(np.float64, copy=False))
         adj_matrix = rustworkx.digraph_adjacency_matrix(graph, lambda x: x)
         self.assertTrue(np.array_equal(adj_matrix, input_matrix))
 
@@ -284,16 +282,12 @@ class TestFromComplexAdjacencyMatrix(unittest.TestCase):
         min_matrix = rustworkx.digraph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="min"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 1.0, 2.0], [0.0, 0.0, 2.0], [1.0, 0.0, 0.0]], min_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 1.0, 2.0], [0.0, 0.0, 2.0], [1.0, 0.0, 0.0]], min_matrix)
 
         max_matrix = rustworkx.digraph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="max"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 4.0, 2.0], [0.0, 0.0, 7.0], [1.0, 0.0, 0.0]], max_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 4.0, 2.0], [0.0, 0.0, 7.0], [1.0, 0.0, 0.0]], max_matrix)
 
         avg_matrix = rustworkx.digraph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="avg"
@@ -305,9 +299,7 @@ class TestFromComplexAdjacencyMatrix(unittest.TestCase):
         sum_matrix = rustworkx.digraph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="sum"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 8.0, 2.0], [0.0, 0.0, 9.0], [1.0, 0.0, 0.0]], sum_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 8.0, 2.0], [0.0, 0.0, 9.0], [1.0, 0.0, 0.0]], sum_matrix)
 
         with self.assertRaises(ValueError):
             rustworkx.digraph_adjacency_matrix(

@@ -447,10 +447,7 @@ class TestBfsPredecessors(unittest.TestCase):
         layers.append([dag.add_node({"layer1": i}) for i in range(parent_cnt)])
         child_cnt = parent_cnt / 2
         layers.append(
-            [
-                dag.add_child(parent1, {"layer2": i}, {})
-                for i, parent1 in enumerate(layers[-1][0::2])
-            ]
+            [dag.add_child(parent1, {"layer2": i}, {}) for i, parent1 in enumerate(layers[-1][0::2])]
         )
         for parent2, child in zip(layers[-2][1::2], layers[-1]):
             dag.add_edge(parent2, child, {})
@@ -458,10 +455,7 @@ class TestBfsPredecessors(unittest.TestCase):
         parent_cnt = child_cnt
         child_cnt = parent_cnt / 2
         layers.append(
-            [
-                dag.add_child(parent1, {"layer3": i}, {})
-                for i, parent1 in enumerate(layers[-1][0::2])
-            ]
+            [dag.add_child(parent1, {"layer3": i}, {}) for i, parent1 in enumerate(layers[-1][0::2])]
         )
         for parent2, child in zip(layers[-2][1::2], layers[-1]):
             dag.add_edge(parent2, child, {})
@@ -469,10 +463,7 @@ class TestBfsPredecessors(unittest.TestCase):
         parent_cnt = child_cnt
         child_cnt = parent_cnt / 2
         layers.append(
-            [
-                dag.add_child(parent1, {"layer4": i}, {})
-                for i, parent1 in enumerate(layers[-1][0::2])
-            ]
+            [dag.add_child(parent1, {"layer4": i}, {}) for i, parent1 in enumerate(layers[-1][0::2])]
         )
         for parent2, child in zip(layers[-2][1::2], layers[-1]):
             dag.add_edge(parent2, child, {})

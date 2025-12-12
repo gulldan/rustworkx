@@ -679,9 +679,7 @@ class TestPathLengthMapping(unittest.TestCase):
         )
 
     def test__eq__invalid_type(self):
-        self.assertFalse(
-            rustworkx.dijkstra_shortest_path_lengths(self.dag, 0, self.fn) == ["a", None]
-        )
+        self.assertFalse(rustworkx.dijkstra_shortest_path_lengths(self.dag, 0, self.fn) == ["a", None])
 
     def test__eq__invalid_inner_type(self):
         self.assertFalse(rustworkx.dijkstra_shortest_path_lengths(self.dag, 0, self.fn) == {0: "a"})
@@ -701,9 +699,7 @@ class TestPathLengthMapping(unittest.TestCase):
         )
 
     def test__ne__invalid_type(self):
-        self.assertTrue(
-            rustworkx.dijkstra_shortest_path_lengths(self.dag, 0, self.fn) != ["a", None]
-        )
+        self.assertTrue(rustworkx.dijkstra_shortest_path_lengths(self.dag, 0, self.fn) != ["a", None])
 
     def test__gt__not_implemented(self):
         with self.assertRaises(NotImplementedError):
@@ -989,20 +985,17 @@ class TestAllPairsPathMapping(unittest.TestCase):
 
     def test__eq__match(self):
         self.assertTrue(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn)
-            == {0: {1: [0, 1]}, 1: {}}
+            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) == {0: {1: [0, 1]}, 1: {}}
         )
 
     def test__eq__not_match_keys(self):
         self.assertFalse(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn)
-            == {2: {2: [0, 1]}, 1: {}}
+            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) == {2: {2: [0, 1]}, 1: {}}
         )
 
     def test__eq__not_match_values(self):
         self.assertFalse(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn)
-            == {0: {1: [0, 2]}, 1: {}}
+            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) == {0: {1: [0, 2]}, 1: {}}
         )
 
     def test__eq__different_length(self):
@@ -1017,9 +1010,7 @@ class TestAllPairsPathMapping(unittest.TestCase):
         )
 
     def test__eq__invalid_type(self):
-        self.assertFalse(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) == {"a": []}
-        )
+        self.assertFalse(rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) == {"a": []})
 
     def test__eq__invalid_inner_type(self):
         self.assertFalse(
@@ -1028,19 +1019,14 @@ class TestAllPairsPathMapping(unittest.TestCase):
 
     def test__ne__match(self):
         self.assertFalse(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn)
-            != {0: {1: [0, 1]}, 1: {}}
+            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) != {0: {1: [0, 1]}, 1: {}}
         )
 
     def test__ne__not_match(self):
-        self.assertTrue(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) != {2: [0, 1]}
-        )
+        self.assertTrue(rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) != {2: [0, 1]})
 
     def test__ne__not_match_values(self):
-        self.assertTrue(
-            rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) != {1: [0, 2]}
-        )
+        self.assertTrue(rustworkx.all_pairs_dijkstra_shortest_paths(self.dag, self.fn) != {1: [0, 2]})
 
     def test__ne__different_length(self):
         self.assertTrue(
@@ -1132,14 +1118,10 @@ class TestAllPairsPathLengthMapping(unittest.TestCase):
         )
 
     def test__eq__not_match_keys(self):
-        self.assertFalse(
-            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) == {1: {2: 1.0}}
-        )
+        self.assertFalse(rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) == {1: {2: 1.0}})
 
     def test__eq__not_match_values(self):
-        self.assertFalse(
-            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) == {0: {2: 2.0}}
-        )
+        self.assertFalse(rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) == {0: {2: 2.0}})
 
     def test__eq__different_length(self):
         self.assertFalse(
@@ -1164,19 +1146,14 @@ class TestAllPairsPathLengthMapping(unittest.TestCase):
         )
 
     def test__ne__not_match(self):
-        self.assertTrue(
-            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) != {0: {2: 1.0}}
-        )
+        self.assertTrue(rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) != {0: {2: 1.0}})
 
     def test__ne__not_match_values(self):
-        self.assertTrue(
-            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) != {0: {1: 2.0}}
-        )
+        self.assertTrue(rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) != {0: {1: 2.0}})
 
     def test__ne__different_length(self):
         self.assertTrue(
-            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn)
-            != {0: {1: 1.0}, 2: {1: 2.0}}
+            rustworkx.all_pairs_dijkstra_path_lengths(self.dag, self.fn) != {0: {1: 1.0}, 2: {1: 2.0}}
         )
 
     def test__ne__invalid_type(self):
@@ -1202,10 +1179,8 @@ class TestAllPairsPathLengthMapping(unittest.TestCase):
         # Since all_pairs_dijkstra_path_lengths() is parallel the order of the
         # output is non-deterministic
         valid_values = [
-            "AllPairsPathLengthMapping{1: PathLengthMapping{}, " "0: PathLengthMapping{1: 3.14}}",
-            "AllPairsPathLengthMapping{"
-            "0: PathLengthMapping{1: 3.14}, "
-            "1: PathLengthMapping{}}",
+            "AllPairsPathLengthMapping{1: PathLengthMapping{}, 0: PathLengthMapping{1: 3.14}}",
+            "AllPairsPathLengthMapping{0: PathLengthMapping{1: 3.14}, 1: PathLengthMapping{}}",
         ]
         self.assertIn(str(res), valid_values)
 
@@ -1274,8 +1249,7 @@ class TestNodeMap(unittest.TestCase):
 
     def test__eq__different_length(self):
         self.assertFalse(
-            self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None)
-            == {0: 1, 1: 2}
+            self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None) == {0: 1, 1: 2}
         )
 
     def test_eq__same_type(self):
@@ -1299,8 +1273,7 @@ class TestNodeMap(unittest.TestCase):
 
     def test__ne__different_length(self):
         self.assertTrue(
-            self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None)
-            != {0: 1, 1: 2}
+            self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None) != {0: 1, 1: 2}
         )
 
     def test__gt__not_implemented(self):
@@ -1352,9 +1325,7 @@ class TestNodeMap(unittest.TestCase):
         self.assertEqual([(0, 1)], list(items))
 
     def test_iter(self):
-        mapping_iter = iter(
-            self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None)
-        )
+        mapping_iter = iter(self.dag.substitute_node_with_subgraph(0, self.in_dag, lambda *args: None))
         output = list(mapping_iter)
         self.assertEqual(output, [0])
 

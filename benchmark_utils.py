@@ -15,7 +15,9 @@ from scipy.stats import hypergeom  # Added for custom significance
 # Vectorized metrics from scikit-learn
 from sklearn.metrics import (
     adjusted_rand_score,
+    completeness_score,
     fowlkes_mallows_score,
+    homogeneity_score,
     normalized_mutual_info_score,
     pair_confusion_matrix,
     v_measure_score,
@@ -33,6 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 # Must be defined at top level for multiprocessing pickling
 
 # --- End Helper Function ---
+
 
 def convert_nx_to_rx(nx_graph: nx.Graph) -> tuple[rx.PyGraph, dict[Any, int]]:
     """Converts a NetworkX graph to a RustWorkX graph.
@@ -57,16 +60,11 @@ def convert_nx_to_rx(nx_graph: nx.Graph) -> tuple[rx.PyGraph, dict[Any, int]]:
         node_map[node] = rx_idx
 
     for u, v, data in nx_graph.edges(data=True):
-        weight: float = 1.0
-        if "weight" in data:
-            weight = float(data["weight"])
-        elif "distance" in data:
-            distance: float = float(data.get("distance", 2.0))
-            similarity: float = max(1e-9, 1.0 - distance / 2.0)
-            weight = similarity
-
-        final_weight: float = float(max(weight, 1e-9))
-        rx_graph.add_edge(node_map[u], node_map[v], final_weight)
+        # Mirror NetworkX semantics: use the 'weight' attribute if present,
+        # otherwise default to 1.0. Do not transform or clamp values so that
+        # RX and NX see identical weights.
+        weight = data.get("weight", 1.0)
+        rx_graph.add_edge(node_map[u], node_map[v], float(weight))
 
     return rx_graph, node_map
 
@@ -122,21 +120,25 @@ def compare_with_true_labels(
         node_to_true = {i: v for i, v in enumerate(true_labels)}
     else:
         logger.warning(
-            f"({algorithm_marker or 'compare_with_true_labels'}) Invalid true_labels type: {type(true_labels)}. Returning zero metrics."
+            f"({algorithm_marker or 'compare_with_true_labels'}) Invalid true_labels type: {type(true_labels)}. Returning NaNs."
         )
-        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+        nan_val = float("nan")
+        return (nan_val,) * 10 + (0,)
 
     common_nodes: list[Any] = sorted(list(set(node_to_pred) & set(node_to_true)))
     if not common_nodes:
         logger.warning(
-            f"({algorithm_marker or 'compare_with_true_labels'}) No common nodes between predicted and true labels. Returning zero metrics."
+            f"({algorithm_marker or 'compare_with_true_labels'}) No common nodes between predicted and true labels. Returning NaNs."
         )
-        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+        nan_val = float("nan")
+        return (nan_val,) * 10 + (0,)
 
     y_true: list[Any] = [node_to_true[n] for n in common_nodes]
     y_pred: list[int] = [node_to_pred[n] for n in common_nodes]
 
-    def safe_metric(func: Callable[[list[Any], list[int]], Any], default: float = 0.0) -> float:
+    nan_val = float("nan")
+
+    def safe_metric(func: Callable[[list[Any], list[int]], Any], default: float = nan_val) -> float:
         try:
             return float(func(y_true, y_pred))
         except Exception as e:
@@ -150,14 +152,12 @@ def compare_with_true_labels(
     v_measure: float = safe_metric(v_measure_score)
     fmi: float = safe_metric(fowlkes_mallows_score)
 
-    homogeneity: float = (
-        0.0  # Placeholder, sklearn.metrics.homogeneity_score requires labels_true, labels_pred
-    )
-    completeness: float = 0.0  # Placeholder, sklearn.metrics.completeness_score
+    homogeneity: float = safe_metric(homogeneity_score)
+    completeness: float = safe_metric(completeness_score)
 
-    pw_precision: float = 0.0
-    pw_recall: float = 0.0
-    pw_f1: float = 0.0
+    pw_precision: float = nan_val
+    pw_recall: float = nan_val
+    pw_f1: float = nan_val
     try:
         if len(set(y_true)) > 1 or len(set(y_pred)) > 1:  # Avoid division by zero if only one cluster
             tn, fp, fn, tp = pair_confusion_matrix(y_true, y_pred).ravel()
@@ -176,12 +176,9 @@ def compare_with_true_labels(
         logger.debug(
             f"({algorithm_marker or 'compare_with_true_labels'}) Error in pairwise metrics: {e_pair}. Returning 0s."
         )
-        pw_precision = pw_recall = pw_f1 = 0.0
+        pw_precision = pw_recall = pw_f1 = nan_val
 
-    # Purity is calculated by calculate_purity function now.
-    # This function's purity calculation was removed earlier based on context.
-
-    vi: float = 0.0
+    vi: float = nan_val
     try:
         from sklearn.metrics import mutual_info_score
 
@@ -218,9 +215,9 @@ def compare_with_true_labels(
             vi = 0.0  # VI should be non-negative
     except Exception as e_vi:
         logger.debug(
-            f"({algorithm_marker or 'compare_with_true_labels'}) Error in VI calculation: {e_vi}. Returning 0."
+            f"({algorithm_marker or 'compare_with_true_labels'}) Error in VI calculation: {e_vi}. Returning NaN."
         )
-        vi = 0.0
+        vi = nan_val
 
     return (
         ari,
@@ -363,7 +360,7 @@ def rx_modularity_calculation(
     try:
         # rustworkx.community.modularity should handle weight_fn=None correctly
         # for unweighted graphs or graphs where edge data are directly weights.
-        return rx.community.modularity(rx_graph, communities, weight_fn=weight_fn) # type: ignore
+        return rx.community.modularity(rx_graph, communities, weight_fn=weight_fn)  # type: ignore
     except AttributeError:
         logger.warning(
             "Warning: Function 'modularity' not found in rustworkx.community or type error with arguments."
@@ -375,87 +372,83 @@ def rx_modularity_calculation(
 
 
 def calculate_custom_significance(nx_graph: nx.Graph, communities_list_of_sets: list[set[Any]]) -> float:
-    """Calculates community significance based on Traag et al. (2015).
+    """Calculates canonical global Significance for a partition (Aldecoa–Marín Surprise base e).
 
-    Significance is defined as sum_c (-log p_c), where p_c is the p-value
-    of observing at least m_c (internal) edges in community c, given its
-    size n_c. The p-value is calculated using the hypergeometric distribution.
+    This computes the tail probability that at least the observed number of
+    intra-community edges would appear under a random edge placement model,
+    using the hypergeometric distribution, and returns -ln(p_value).
+
+    Specifically, let:
+      - N_nodes = number of nodes in the (undirected, simple) graph
+      - M_total = C(N_nodes, 2) = total possible edges
+      - M_edges = actual number of edges in the graph
+      - N_within = sum over communities of C(|C_i|, 2) = possible intra-community pairs
+      - m_within = sum over communities of observed intra-community edges
+
+    Then p_value = sf(m_within - 1; M_total, N_within, M_edges) and
+    Significance = -ln(p_value). Surprise (base-10) = -log10(p_value).
 
     Args:
-        nx_graph: The NetworkX graph object.
-        communities_list_of_sets: A list of communities, where each community
-            is a set of node IDs.
+        nx_graph: The NetworkX graph object (should be simple undirected for counting).
+        communities_list_of_sets: A list of communities (sets of node IDs).
 
     Returns:
-        The calculated significance score as a float. Returns `np.nan` or `0.0`
-        under certain conditions (e.g., graph too small, no edges, calculation errors).
+        Significance value (natural log). Returns np.nan on invalid inputs, or 0.0
+        when no intra-community structure is possible (e.g., no edges).
     """
-    N: int = nx_graph.number_of_nodes()
-    M_graph_edges: int = nx_graph.number_of_edges()
-    
-    # Removed early skip for large graphs. Instead use vectorized evaluation for performance.
+    N_nodes: int = nx_graph.number_of_nodes()
+    M_edges: int = nx_graph.number_of_edges()
 
-    if N < 2:
-        logger.info(f"Custom significance: Graph has < 2 nodes (N={N}). Returning NaN.")
+    if N_nodes < 2:
         return np.nan
 
-    total_possible_edges_in_graph: int = N * (N - 1) // 2
+    M_total: int = N_nodes * (N_nodes - 1) // 2
+    if M_total == 0:
+        return np.nan
 
-    if M_graph_edges == 0:
-        logger.info("Custom significance: Graph has 0 edges. Returning 0.0.")
+    if M_edges == 0:
+        # No edges: p-value = 1 for m_within = 0, significance 0
         return 0.0
 
-    if total_possible_edges_in_graph == 0:  # Should be caught by N < 2, but defensive
-        logger.warning(
-            f"Custom significance: Total possible edges in graph is 0 despite N={N}>=2. Returning NaN."
-        )
+    if M_edges > M_total:
+        # Invalid simple-graph case
         return np.nan
 
-    if M_graph_edges > total_possible_edges_in_graph:
-        logger.warning(
-            f"Custom significance: Graph edges {M_graph_edges} > total possible edges {total_possible_edges_in_graph}. Invalid. Returning NaN."
-        )
-        return np.nan
+    # Compute global possible-within pairs and observed-within edges
+    N_within: int = 0
+    m_within: int = 0
 
-    # Vectorized computation across communities
-    k_arr = []  # m_c - 1
-    n_arr = []  # possible_edges_in_c
-
-    for community_nodes_set in communities_list_of_sets:
-        n_c = len(community_nodes_set)
+    for comm_nodes in communities_list_of_sets:
+        n_c = len(comm_nodes)
         if n_c < 2:
             continue
-        valid_nodes = [node for node in community_nodes_set if node in nx_graph]
-        if len(valid_nodes) < 2:
-            continue
+        N_within += n_c * (n_c - 1) // 2
+        # Count actual internal edges for this community
+        sub = nx_graph.subgraph(comm_nodes)
+        m_within += sub.number_of_edges()
 
-        subgraph_c = nx_graph.subgraph(valid_nodes)
-        m_c = subgraph_c.number_of_edges()
-        possible_edges_in_c = n_c * (n_c - 1) // 2
-        if possible_edges_in_c == 0:
-            continue
-
-        k_arr.append(m_c - 1)
-        n_arr.append(possible_edges_in_c)
-
-    if not k_arr:
+    # If no within-pair is possible, significance is 0
+    if N_within == 0:
         return 0.0
 
-    k_vec = np.array(k_arr)
-    n_vec = np.array(n_arr)
-    M_sf = total_possible_edges_in_graph
-    K_sf = M_graph_edges
+    # Hypergeometric tail probability: P[X >= m_within]
+    # scipy.stats.hypergeom.sf(k, M, n, N): population M, successes n, draws N, tail >= k+1
+    k_param = max(0, m_within - 1)
+    p_val = float(hypergeom.sf(k_param, M_total, N_within, M_edges))
+    # Numerical guards
+    if not np.isfinite(p_val) or p_val <= 0.0:
+        p_val = 1e-300
+    elif p_val > 1.0:
+        p_val = 1.0
 
-    p_vals = hypergeom.sf(k_vec, M_sf, n_vec, K_sf)
+    significance_ln = -float(np.log(p_val))
+    # Cap extremely large values to avoid inf downstream (approx -ln(min double))
+    if not np.isfinite(significance_ln):
+        significance_ln = 708.0
+    else:
+        significance_ln = min(significance_ln, 708.0)
 
-    # Handle 0, NaN, etc.
-    p_vals = np.clip(p_vals, 1e-300, 1.0)
-    neg_log_p = -np.log(p_vals)
-
-    # Cap very high values to 708 (approx -log(min double))
-    neg_log_p = np.minimum(neg_log_p, 708.0)
-
-    return float(np.sum(neg_log_p))
+    return significance_ln
 
 
 # Precompute global triangles function for efficiency
@@ -486,8 +479,24 @@ def calculate_internal_metrics(
     if not communities_list_of_sets or nx_graph.number_of_nodes() == 0:
         return (np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan)
 
-    total_edges_graph = nx_graph.number_of_edges()
-    triangle_cache = _global_triangles_cache(nx_graph)
+    # Use a simple undirected graph for internal metrics to avoid unsupported ops on directed/multi graphs
+    if nx_graph.is_directed() or isinstance(nx_graph, (nx.MultiGraph, nx.MultiDiGraph)):
+        G_u = nx.Graph()
+        G_u.add_nodes_from(nx_graph.nodes())
+        try:
+            # Collapses multiedges automatically when adding to simple Graph
+            G_u.add_edges_from(nx_graph.to_undirected().edges())
+        except Exception:
+            # Fallback: iterate edges without data
+            G_u.add_edges_from([(u, v) for u, v in nx_graph.edges()])
+    else:
+        G_u = nx_graph if isinstance(nx_graph, nx.Graph) else nx.Graph(nx_graph)
+
+    total_edges_graph = G_u.number_of_edges()
+    try:
+        triangle_cache = _global_triangles_cache(G_u)
+    except Exception:
+        triangle_cache = {}
 
     conductance_vals: list[float] = []
     int_density_vals: list[float] = []
@@ -500,7 +509,7 @@ def calculate_internal_metrics(
         if n_c < 1:
             continue
 
-        subgraph = nx_graph.subgraph(comm)
+        subgraph = G_u.subgraph(comm)
         m_c = subgraph.number_of_edges()
 
         # Internal density
@@ -513,7 +522,7 @@ def calculate_internal_metrics(
         # Cut edges
         cut_edges = 0
         for u in comm:
-            for v in nx_graph.neighbors(u):
+            for v in G_u.neighbors(u):
                 if v not in comm:
                     cut_edges += 1
         cut_edges = cut_edges / 2  # undirected counted twice
@@ -539,10 +548,10 @@ def calculate_internal_metrics(
     tpr = _mean_safe(tpr_vals)
     cut_ratio = _mean_safe(cut_ratio_vals)
 
-    surprise = np.nan  # Placeholder (complex to compute efficiently)
-
-    significance_raw = calculate_custom_significance(nx_graph, communities_list_of_sets)
-    significance = significance_raw if not (np.isnan(significance_raw) or np.isinf(significance_raw)) else np.nan
+    # Canonical global Significance/Surprise (Aldecoa–Marín): -ln p and -log10 p
+    significance_raw = calculate_custom_significance(G_u, communities_list_of_sets)
+    significance = significance_raw if np.isfinite(significance_raw) else np.nan
+    surprise = (significance_raw / np.log(10.0)) if np.isfinite(significance_raw) else np.nan
 
     logger.info(
         f"({algorithm_marker}) internal metrics computed: cond={conductance:.3f}, dens={internal_density:.3f}, avg_int_deg={avg_internal_degree:.3f}, tpr={tpr:.3f}, cut_ratio={cut_ratio:.3f}, significance={significance:.3f}"
@@ -618,22 +627,15 @@ def calculate_purity(
         return np.nan, 0
 
     cm_arr = np.asarray(cm, dtype=np.float64)
-    true_sizes = cm_arr.sum(axis=1).reshape(-1, 1)
-    pred_sizes = cm_arr.sum(axis=0).reshape(1, -1)
-    union = true_sizes + pred_sizes - cm_arr
-    jaccard = np.divide(cm_arr, union, out=np.zeros_like(cm_arr), where=union != 0)
+    total_points = float(cm_arr.sum())
+    if total_points == 0:
+        return np.nan, 0
 
-    max_j_true = jaccard.max(axis=1)
-    max_j_pred = jaccard.max(axis=0)
+    # Purity: (1/N) * sum over predicted clusters of the max overlap with any true cluster
+    max_over_true_per_pred = cm_arr.max(axis=0)  # shape: (num_pred,)
+    purity_score = float(max_over_true_per_pred.sum() / total_points)
 
-    gcr = float((max_j_true > 0.5).mean())
-    pcp = float((max_j_pred > 0.5).mean())
-
-    logger.info(
-        f"PCP/GCR DEBUG: pred_comms={cm.shape[1]}, true_comms={cm.shape[0]}, pcp={pcp:.3f}, gcr={gcr:.3f}, j_thresh=0.5"
-    )
-
-    return gcr, len(common_nodes)
+    return purity_score, len(common_nodes)
 
 
 def calculate_cluster_matching_metrics(
@@ -644,43 +646,24 @@ def calculate_cluster_matching_metrics(
 ) -> tuple[float, float]:
     """Calculates Ground Truth Cluster Recall (GCR) and Predicted Cluster Precision (PCP).
 
-    GCR: Percentage of ground truth clusters well-matched by predicted clusters.
-    PCP: Percentage of predicted clusters well-matched by ground truth clusters.
-    A 'good match' is defined by Jaccard Index > `jaccard_threshold`.
-
-    Args:
-        predicted_communities_input: List of predicted communities. Each community
-            is a list or set of node IDs (original, or RX int indices if `node_map`
-            is given).
-        true_labels: Dict mapping node ID to true cluster ID, or a list of
-            true cluster IDs for 0-N indexed integer nodes.
-        node_map: Optional dict mapping original node ID to RX int index.
-        jaccard_threshold: Minimum Jaccard Index for a match (default 0.5).
-
-    Returns:
-        A tuple (gcr, pcp), where gcr is Ground Truth Recall and pcp is
-        Predicted Cluster Precision. Both are floats between 0.0 and 1.0.
-        Returns (0.0, 0.0) if inputs are empty or issues occur.
+    Aims to always return numeric values (no NaN) so downstream tables stay populated,
+    even for degenerate cases with single clusters.
     """
-    # --- Vectorized implementation ---
-    # Map predicted communities to node -> cluster_id
     node_to_pred: dict[Any, int] = {}
     for idx, comm in enumerate(predicted_communities_input):
         if not comm:
             continue
         for n in comm:
             if node_map is not None:
-                n = {v: k for k, v in node_map.items()}.get(n, n)  # map back to original if needed
+                n = {v: k for k, v in node_map.items()}.get(n, n)
             node_to_pred[n] = idx
 
     if not node_to_pred:
-        logger.info("PCP/GCR: Predicted communities empty after processing. Returning 0,0.")
         return 0.0, 0.0
 
-    # Ground-truth mapping
     if isinstance(true_labels, dict):
         node_to_true = true_labels
-    else:  # list[int]
+    else:
         node_to_true = {i: v for i, v in enumerate(true_labels)}  # type: ignore[arg-type]
 
     common_nodes = [n for n in node_to_pred if n in node_to_true]
@@ -697,14 +680,35 @@ def calculate_cluster_matching_metrics(
     cm_arr = np.asarray(cm, dtype=np.float64)
     true_sizes = cm_arr.sum(axis=1).reshape(-1, 1)
     pred_sizes = cm_arr.sum(axis=0).reshape(1, -1)
+
+    # Handle single-cluster edge cases explicitly to avoid NaNs.
+    if cm_arr.shape[0] == 1 and cm_arr.shape[1] == 1:
+        return 1.0, 1.0
+    if cm_arr.shape[0] == 1:
+        # One ground-truth cluster vs multiple predicted clusters.
+        inter = cm_arr[0, :]
+        union = true_sizes[0, 0] + pred_sizes[0, :] - inter
+        jacc = np.divide(inter, union, out=np.zeros_like(inter), where=union != 0)
+        gcr_val = 1.0 if np.any(jacc > jaccard_threshold) else 0.0
+        pcp_val = float((jacc > jaccard_threshold).mean()) if jacc.size > 0 else 0.0
+        return gcr_val, pcp_val
+    if cm_arr.shape[1] == 1:
+        # Multiple ground-truth clusters vs one predicted cluster.
+        inter = cm_arr[:, 0]
+        union = true_sizes[:, 0] + pred_sizes[0, 0] - inter
+        jacc = np.divide(inter, union, out=np.zeros_like(inter), where=union != 0)
+        gcr_val = float((jacc > jaccard_threshold).mean()) if jacc.size > 0 else 0.0
+        pcp_val = 1.0 if np.any(jacc > jaccard_threshold) else 0.0
+        return gcr_val, pcp_val
+
     union = true_sizes + pred_sizes - cm_arr
     jaccard = np.divide(cm_arr, union, out=np.zeros_like(cm_arr), where=union != 0)
 
     max_j_true = jaccard.max(axis=1)
     max_j_pred = jaccard.max(axis=0)
 
-    gcr = float((max_j_true > jaccard_threshold).mean())
-    pcp = float((max_j_pred > jaccard_threshold).mean())
+    gcr = float((max_j_true > jaccard_threshold).mean()) if max_j_true.size > 0 else 0.0
+    pcp = float((max_j_pred > jaccard_threshold).mean()) if max_j_pred.size > 0 else 0.0
 
     logger.info(
         f"PCP/GCR DEBUG: pred_comms={cm.shape[1]}, true_comms={cm.shape[0]}, pcp={pcp:.3f}, gcr={gcr:.3f}, j_thresh={jaccard_threshold}"

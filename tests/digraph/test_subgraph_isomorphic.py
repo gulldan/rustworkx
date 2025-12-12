@@ -35,9 +35,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertTrue(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_subgraph_isomorphic_identical(self):
@@ -85,9 +83,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertFalse(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_subgraph_isomorphic_compare_nodes_identical(self):
@@ -108,9 +104,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertTrue(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_is_subgraph_isomorphic_nodes_compare_raises(self):

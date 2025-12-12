@@ -785,9 +785,7 @@ class TestEdges(unittest.TestCase):
 
     def test_get_edge_data_by_index_invalid_index(self):
         graph = rustworkx.PyDiGraph()
-        with self.assertRaisesRegex(
-            IndexError, "Provided edge index 2 is not present in the graph"
-        ):
+        with self.assertRaisesRegex(IndexError, "Provided edge index 2 is not present in the graph"):
             graph.get_edge_data_by_index(2)
 
     def test_get_edge_endpoints_by_index(self):
@@ -805,9 +803,7 @@ class TestEdges(unittest.TestCase):
 
     def test_get_edge_endpoints_by_index_invalid_index(self):
         graph = rustworkx.PyDiGraph()
-        with self.assertRaisesRegex(
-            IndexError, "Provided edge index 2 is not present in the graph"
-        ):
+        with self.assertRaisesRegex(IndexError, "Provided edge index 2 is not present in the graph"):
             graph.get_edge_endpoints_by_index(2)
 
     def test_incident_edges(self):

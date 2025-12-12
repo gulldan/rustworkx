@@ -64,12 +64,8 @@ class TestDeepcopy(unittest.TestCase):
         self.assertIsNot(graph_a.attrs, graph_b.attrs)
         self.assertEqual(graph_a[node_a], graph_b[node_a])
         self.assertIsNot(graph_a[node_a], graph_b[node_a])
-        self.assertEqual(
-            graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b)
-        )
-        self.assertIsNot(
-            graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b)
-        )
+        self.assertEqual(graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b))
+        self.assertIsNot(graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b))
 
     def test_deepcopy_multinode_hole_in_middle(self):
         graph = rustworkx.PyDiGraph()
@@ -93,6 +89,4 @@ class TestDeepcopy(unittest.TestCase):
             ]
         )
         copied_graph = copy.deepcopy(graph)
-        self.assertEqual(
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19], copied_graph.node_indices()
-        )
+        self.assertEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 18, 19], copied_graph.node_indices())

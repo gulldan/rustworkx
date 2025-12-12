@@ -329,9 +329,7 @@ def draw_graph(graph, pos=None, arrows=True, with_labels=False, **kwds):
         kwds["labels"] = {x: label_fn(graph[x]) for x in graph.node_indices()}
     edge_label_fn = kwds.pop("edge_labels", None)
     if edge_label_fn:
-        kwds["edge_labels"] = {
-            (x[0], x[1]): edge_label_fn(x[2]) for x in graph.weighted_edge_list()
-        }
+        kwds["edge_labels"] = {(x[0], x[1]): edge_label_fn(x[2]) for x in graph.weighted_edge_list()}
 
     node_kwds = {k: v for k, v in kwds.items() if k in valid_node_kwds}
     edge_kwds = {k: v for k, v in kwds.items() if k in valid_edge_kwds}

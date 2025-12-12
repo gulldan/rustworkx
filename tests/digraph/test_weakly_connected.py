@@ -45,17 +45,13 @@ class TestWeaklyConnected(unittest.TestCase):
 
     def test_weakly_connected_components(self):
         graph = rustworkx.PyDiGraph()
-        graph.extend_from_edge_list(
-            [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)]
-        )
+        graph.extend_from_edge_list([(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)])
         components = rustworkx.weakly_connected_components(graph)
         self.assertEqual([{0, 1, 2, 3}, {4, 5, 6, 7}], components)
 
     def test_is_weakly_connected_false(self):
         graph = rustworkx.PyDiGraph()
-        graph.extend_from_edge_list(
-            [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)]
-        )
+        graph.extend_from_edge_list([(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4)])
         self.assertFalse(rustworkx.is_weakly_connected(graph))
 
     def test_is_weakly_connected_true(self):

@@ -10,14 +10,17 @@
 // License for the specific language governing permissions and limitations
 // under the License.
 
+pub mod asyn_lpa;
+pub mod asyn_lpa_communities_strongest;
+mod common;
 // Declare submodules as public so they are visible from lib.rs
 pub mod cliques;
 pub mod cpm;
 pub mod leiden;
 pub mod louvain;
-pub mod lpa;
 
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
 
 #[pymodule]
 pub fn community(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
@@ -29,7 +32,10 @@ pub fn community(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(leiden::leiden_communities, m)?)?;
     // Add cliques function
     m.add_function(wrap_pyfunction!(cliques::find_maximal_cliques, m)?)?;
-    m.add_function(wrap_pyfunction!(lpa::label_propagation_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(lpa::lpa_modularity, m)?)?;
+    m.add_function(wrap_pyfunction!(asyn_lpa::asyn_lpa_communities, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        asyn_lpa_communities_strongest::asyn_lpa_communities_strongest,
+        m
+    )?)?;
     Ok(())
 }

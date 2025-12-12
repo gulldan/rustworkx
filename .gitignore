@@ -3,8 +3,6 @@
 __pycache__
 *.pyc
 dist/
-datasets
-.venv
 build/
 *egg*
 docs/build/
@@ -23,7 +21,10 @@ retworkx/*pyd
 !/docs/source/images/*.svg
 *.jpg
 **/*.so
-retworkx-core/Cargo.lock
+rustworkx-core/Cargo.lock
 **/.DS_Store
 venv/
+target
 .pytest_cache/
+datasets
+.ruff_cache

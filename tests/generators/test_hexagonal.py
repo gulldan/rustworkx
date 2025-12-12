@@ -442,9 +442,7 @@ class TestHexagonalLatticeGraph(unittest.TestCase):
         for nRows in range(2, 8):
             for nCols in range(2, 8, 2):
                 with self.subTest(nRows=nRows, nCols=nCols):
-                    graph = rustworkx.generators.hexagonal_lattice_graph(
-                        nRows, nCols, periodic=True
-                    )
+                    graph = rustworkx.generators.hexagonal_lattice_graph(nRows, nCols, periodic=True)
                     for n in range(graph.num_nodes()):
                         self.assertEqual(graph.degree(n), 3)
 
@@ -571,9 +569,7 @@ class TestHexagonalLatticeGraph(unittest.TestCase):
         for nRows in range(2, 8):
             for nCols in range(2, 8, 2):
                 with self.subTest(nRows=nRows, nCols=nCols):
-                    graph = rustworkx.generators.hexagonal_lattice_graph(
-                        nRows, nCols, periodic=True
-                    )
+                    graph = rustworkx.generators.hexagonal_lattice_graph(nRows, nCols, periodic=True)
 
                     nx_graph = rustworkx.networkx_converter(
                         networkx.hexagonal_lattice_graph(nRows, nCols, periodic=True)
@@ -605,9 +601,7 @@ class TestHexagonalLatticeGraph(unittest.TestCase):
                 self.assertAlmostEqual(np.linalg.norm(v), 1.0, 12)
             for ii in range(6):
                 # Check that the angle between each consecutive pair of sides is pi/3
-                self.assertAlmostEqual(
-                    np.dot(vectors[ii], vectors[(ii + 1) % 6]), np.cos(np.pi / 3), 12
-                )
+                self.assertAlmostEqual(np.dot(vectors[ii], vectors[(ii + 1) % 6]), np.cos(np.pi / 3), 12)
 
     def test_hexagonal_graph_with_positions_odd_number_of_columns(self):
         graph = rustworkx.generators.hexagonal_lattice_graph(2, 3, with_positions=True)
@@ -631,6 +625,4 @@ class TestHexagonalLatticeGraph(unittest.TestCase):
                 self.assertAlmostEqual(np.linalg.norm(v), 1.0, 12)
             for ii in range(6):
                 # Check that the angle between each consecutive pair of sides is pi/3
-                self.assertAlmostEqual(
-                    np.dot(vectors[ii], vectors[(ii + 1) % 6]), np.cos(np.pi / 3), 12
-                )
+                self.assertAlmostEqual(np.dot(vectors[ii], vectors[(ii + 1) % 6]), np.cos(np.pi / 3), 12)

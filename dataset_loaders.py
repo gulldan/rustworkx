@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 # BasicConfig should be handled by the main script (benchmark_community.py)
 
 # Define a common return type for simple loaders
-SimpleLoaderReturn = tuple[nx.Graph, list[int], bool]
+# Ground truth may be a list (index -> label) or a dict (node_id -> label)
+SimpleLoaderReturn = tuple[nx.Graph, list[int] | dict[Any, int], bool]
 # Define a common return type for dict-based loaders
 DictLoaderReturn = dict[str, nx.Graph | dict[Any, int] | dict[str, Any] | str | None]
 
@@ -56,8 +57,8 @@ def load_davis_women() -> SimpleLoaderReturn:
     true_labels: list[int] = [0] * len(G.nodes())
     logger.warning("Davis Southern Women graph loaded with dummy ground truth (all nodes in one group).")
     for u, v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -77,8 +78,8 @@ def load_florentine_families() -> SimpleLoaderReturn:
     true_labels: list[int] = [0] * len(G.nodes())
     logger.warning("Florentine Families graph loaded with dummy ground truth (all nodes in one group).")
     for u, v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -96,30 +97,93 @@ def load_les_miserables() -> SimpleLoaderReturn:
             - bool: True, indicating ground truth is available.
     """
     G_orig: nx.Graph = nx.les_miserables_graph()
-    
+
     old_groups: dict[str, int] = {
-        "Myriel": 0, "Napoleon": 0, "MlleBaptistine": 0, "MmeMagloire": 0, "CountessDeLo": 0,
-        "Geborand": 0, "Champtercier": 0, "Cravatte": 0, "Count": 0, "OldMan": 0,
-        "Valjean": 1, "Labarre": 1, "Marguerite": 1, "MmeDeR": 1, "Isabeau": 1,
-        "Gervais": 1, "Tholomyes": 2, "Listolier": 2, "Fameuil": 2, "Blacheville": 2,
-        "Favourite": 2, "Dahlia": 2, "Zephine": 2, "Fantine": 2, "MmeThenardier": 3,
-        "Thenardier": 3, "Cosette": 3, "Javert": 4, "Fauchelevent": 4, "Bamatabois": 4,
-        "Perpetue": 4, "Simplice": 4, "Scaufflaire": 4, "Woman1": 4, "Judge": 4,
-        "Champmathieu": 4, "Brevet": 4, "Chenildieu": 4, "Cochepaille": 4, "Pontmercy": 5,
-        "Boulatruelle": 5, "Eponine": 5, "Anzelma": 5, "Woman2": 5, "MotherInnocent": 6,
-        "Gribier": 6, "Jondrette": 7, "MmeBurgon": 7, "Gavroche": 7, "Gillenormand": 8,
-        "Magnon": 8, "MlleGillenormand": 8, "MmePontmercy": 8, "MlleVaubois": 8,
-        "LtGillenormand": 8, "Marius": 8, "BaronessT": 8, "Mabeuf": 9, "Enjolras": 9,
-        "Combeferre": 9, "Prouvaire": 9, "Feuilly": 9, "Courfeyrac": 9, "Bahorel": 9,
-        "Bossuet": 9, "Joly": 9, "Grantaire": 9, "MotherPlutarch": 9, "Gueulemer": 10,
-        "Babet": 10, "Claquesous": 10, "Montparnasse": 10, "Toussaint": 11, "Child1": 11,
-        "Child2": 11, "Brujon": 11, "MmeHucheloup": 11
+        "Myriel": 0,
+        "Napoleon": 0,
+        "MlleBaptistine": 0,
+        "MmeMagloire": 0,
+        "CountessDeLo": 0,
+        "Geborand": 0,
+        "Champtercier": 0,
+        "Cravatte": 0,
+        "Count": 0,
+        "OldMan": 0,
+        "Valjean": 1,
+        "Labarre": 1,
+        "Marguerite": 1,
+        "MmeDeR": 1,
+        "Isabeau": 1,
+        "Gervais": 1,
+        "Tholomyes": 2,
+        "Listolier": 2,
+        "Fameuil": 2,
+        "Blacheville": 2,
+        "Favourite": 2,
+        "Dahlia": 2,
+        "Zephine": 2,
+        "Fantine": 2,
+        "MmeThenardier": 3,
+        "Thenardier": 3,
+        "Cosette": 3,
+        "Javert": 4,
+        "Fauchelevent": 4,
+        "Bamatabois": 4,
+        "Perpetue": 4,
+        "Simplice": 4,
+        "Scaufflaire": 4,
+        "Woman1": 4,
+        "Judge": 4,
+        "Champmathieu": 4,
+        "Brevet": 4,
+        "Chenildieu": 4,
+        "Cochepaille": 4,
+        "Pontmercy": 5,
+        "Boulatruelle": 5,
+        "Eponine": 5,
+        "Anzelma": 5,
+        "Woman2": 5,
+        "MotherInnocent": 6,
+        "Gribier": 6,
+        "Jondrette": 7,
+        "MmeBurgon": 7,
+        "Gavroche": 7,
+        "Gillenormand": 8,
+        "Magnon": 8,
+        "MlleGillenormand": 8,
+        "MmePontmercy": 8,
+        "MlleVaubois": 8,
+        "LtGillenormand": 8,
+        "Marius": 8,
+        "BaronessT": 8,
+        "Mabeuf": 9,
+        "Enjolras": 9,
+        "Combeferre": 9,
+        "Prouvaire": 9,
+        "Feuilly": 9,
+        "Courfeyrac": 9,
+        "Bahorel": 9,
+        "Bossuet": 9,
+        "Joly": 9,
+        "Grantaire": 9,
+        "MotherPlutarch": 9,
+        "Gueulemer": 10,
+        "Babet": 10,
+        "Claquesous": 10,
+        "Montparnasse": 10,
+        "Toussaint": 11,
+        "Child1": 11,
+        "Child2": 11,
+        "Brujon": 11,
+        "MmeHucheloup": 11,
     }
-    
-    pos: dict[Any, np.ndarray] = nx.spring_layout(G_orig, k=1/np.sqrt(len(G_orig.nodes())), iterations=50, seed=42)
+
+    pos: dict[Any, np.ndarray] = nx.spring_layout(
+        G_orig, k=1 / np.sqrt(len(G_orig.nodes())), iterations=50, seed=42
+    )
     H: nx.Graph = nx.Graph()
     mapping: dict[Any, int] = {old: i for i, old in enumerate(G_orig.nodes())}
-    
+
     for old_node, new_node_idx in mapping.items():
         H.add_node(new_node_idx, pos=pos.get(old_node), value=old_groups.get(old_node, -1))
 
@@ -141,19 +205,19 @@ def load_football() -> SimpleLoaderReturn:
             - nx.Graph: The American College Football graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/football.gml' is not found.
     """
     file_path: str = "datasets/football.gml"
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Dataset file not found: {file_path}. Please ensure it exists.")
-    
+
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -168,7 +232,7 @@ def load_political_books() -> SimpleLoaderReturn:
             - nx.Graph: The Political Books graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/polbooks.gml' is not found.
     """
@@ -178,32 +242,10 @@ def load_political_books() -> SimpleLoaderReturn:
 
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
-
-
-def load_wiki_news_sim(**kwargs) -> DictLoaderReturn:
-    """Load the Wiki News Similarity dataset from a Parquet file.
-
-    This is a wrapper around `load_graph_edges_gt_clusters` for a specific
-    large dataset with ground truth communities. It accepts and ignores
-    extra keyword arguments like `dtype_spec` for compatibility with the
-    benchmark runner.
-
-    Returns:
-        DictLoaderReturn: A dictionary containing the graph, ground truth,
-                          and other metadata.
-    """
-    # The benchmark runner might pass dtype_spec, which we ignore.
-    _ = kwargs  # Explicitly mark as unused
-    file_path = "datasets/wiki_news_edges_sim_thresh_0_9.parquet"
-    return load_graph_edges_gt_clusters(
-        file_path=file_path,
-        name="Wiki News Sim",
-        dtype_spec={"src": str, "dst": str}
-    )
 
 
 def load_dolphins() -> SimpleLoaderReturn:
@@ -218,19 +260,19 @@ def load_dolphins() -> SimpleLoaderReturn:
             - nx.Graph: The Dolphins Social Network graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/dolphins.gml' is not found.
     """
     file_path: str = "datasets/dolphins.gml"
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Dataset file not found: {file_path}. Please ensure it exists.")
-        
+
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -243,10 +285,10 @@ def load_polblogs() -> SimpleLoaderReturn:
 
     Returns:
         A tuple containing:
-            - nx.Graph: The Political Blogs graph.
+            - nx.Graph: The Political Blogs graph (undirected).
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/polblogs.gml' is not found.
     """
@@ -254,11 +296,16 @@ def load_polblogs() -> SimpleLoaderReturn:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Dataset file not found: {file_path}. Please ensure it exists.")
 
-    G: nx.Graph = nx.read_gml(file_path, label="id")
+    G_raw = nx.read_gml(file_path, label="id")
+    # Convert to undirected graph if needed (polblogs.gml is directed)
+    if G_raw.is_directed():
+        G: nx.Graph = nx.Graph(G_raw)
+    else:
+        G = G_raw
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -278,7 +325,7 @@ def load_cora(data_dir: str = "datasets/cora", name: str = "Cora") -> SimpleLoad
             - nx.Graph: The Cora citation graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If '{data_dir}/cora.gml' is not found.
     """
@@ -288,9 +335,9 @@ def load_cora(data_dir: str = "datasets/cora", name: str = "Cora") -> SimpleLoad
 
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -306,7 +353,7 @@ def load_facebook() -> SimpleLoaderReturn:
             - nx.Graph: The Facebook graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/facebook.gml' is not found.
     """
@@ -316,9 +363,9 @@ def load_facebook() -> SimpleLoaderReturn:
 
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node]["value"] for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -334,7 +381,7 @@ def load_citeseer() -> SimpleLoaderReturn:
             - nx.Graph: The Citeseer graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/citeseer.gml' is not found.
     """
@@ -344,9 +391,9 @@ def load_citeseer() -> SimpleLoaderReturn:
 
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node].get("value", 0) for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -362,7 +409,7 @@ def load_email_eu_core() -> SimpleLoaderReturn:
             - nx.Graph: The Email EU Core graph.
             - list[int]: A list of true community labels.
             - bool: True, indicating ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/email_eu_core.gml' is not found.
     """
@@ -372,9 +419,9 @@ def load_email_eu_core() -> SimpleLoaderReturn:
 
     G: nx.Graph = nx.read_gml(file_path, label="id")
     true_labels: list[int] = [G.nodes[node].get("value", 0) for node in G.nodes()]
-    for u,v in G.edges():
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    for u, v in G.edges():
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
@@ -391,60 +438,59 @@ def load_graph_edges_csv() -> SimpleLoaderReturn:
             - nx.Graph: The loaded graph.
             - list[int]: A list of dummy true community labels (all zeros).
             - bool: False, indicating no actual ground truth is available.
-            
+
     Raises:
         FileNotFoundError: If 'datasets/graph_edges.csv' is not found.
         pl.exceptions.ComputeError: If Polars encounters issues reading the CSV.
     """
     file_path: str = "datasets/graph_edges.csv"
     logger.info(f"Loading graph from {file_path}...")
-    
+
     # Import os for CPU optimization
     import os
+
     original_threads = os.environ.get("POLARS_MAX_THREADS")
     cpu_count = os.cpu_count() or 4
     os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
-    
+
     try:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found: {file_path}")
 
         # Use lazy CSV reading for better performance
         lf = pl.scan_csv(file_path)
-        
+
         # Check if distance column exists
         schema = lf.schema
         required_cols = ["src", "dst"]
         distance_col = "distance"
-        
+
         if distance_col in schema:
             required_cols.append(distance_col)
-        
+
         # Select only needed columns and apply transformations
         lf = lf.select(required_cols)
-        
+
         # Handle missing distance and compute similarity weights
         if distance_col not in lf.columns:
             lf = lf.with_columns(pl.lit(2.0, dtype=pl.Float32).alias(distance_col))
-        
-        lf = lf.with_columns([
-            pl.col(distance_col).fill_null(2.0).cast(pl.Float32)
-        ]).with_columns(
+
+        lf = lf.with_columns([pl.col(distance_col).fill_null(2.0).cast(pl.Float32)]).with_columns(
             pl.max_horizontal(
                 pl.lit(1e-9, dtype=pl.Float32),
-                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32))
+                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)),
             ).alias("weight")
         )
-        
+
         # Collect with optimizations
         logger.info(f"  Processing CSV with {cpu_count} CPU cores...")
         df = lf.collect(
             type_coercion=True,
             predicate_pushdown=True,
             projection_pushdown=True,
-            simplify_expression=True
+            simplify_expression=True,
         )
-        
+
         # Build graph efficiently
         G: nx.Graph = nx.Graph()
         edge_data = df.select(["src", "dst", "weight"]).rows()
@@ -453,7 +499,7 @@ def load_graph_edges_csv() -> SimpleLoaderReturn:
         num_nodes = G.number_of_nodes()
         num_edges = G.number_of_edges()
         logger.info(f"Created graph with {num_nodes} nodes and {num_edges} edges from CSV.")
-        
+
         true_labels: list[int]
         if num_nodes > 0:
             true_labels = [0] * num_nodes
@@ -461,9 +507,9 @@ def load_graph_edges_csv() -> SimpleLoaderReturn:
         else:
             true_labels = []
             logger.warning("Graph loaded from CSV is empty. No labels generated.")
-            
+
         return G, true_labels, False
-        
+
     except Exception as e:
         logger.error(f"Error loading graph from CSV {file_path}: {e}", exc_info=True)
         G = nx.Graph()
@@ -489,50 +535,49 @@ def load_graph_edges_parquet() -> SimpleLoaderReturn:
             - nx.Graph: The loaded graph.
             - list[int]: Dummy true community labels (all zeros).
             - bool: False (no actual ground truth).
-            
+
     Raises:
         FileNotFoundError: If 'datasets/graph_edges_big.parquet' is not found.
         pl.exceptions.ComputeError: If Polars has issues reading the Parquet.
     """
     file_path: str = "datasets/graph_edges_big.parquet"
     logger.info(f"Loading graph from {file_path}...")
-    
+
     # Import os for CPU optimization
     import os
+
     original_threads = os.environ.get("POLARS_MAX_THREADS")
     cpu_count = os.cpu_count() or 4
     os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
-    
+
     try:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found: {file_path}")
-            
+
         # Use lazy Parquet reading for better performance
         lf = pl.scan_parquet(file_path)
         schema = lf.schema
-        
+
         required_cols = ["src", "dst"]
         distance_col = "distance"
-        
+
         if distance_col in schema:
             required_cols.append(distance_col)
-        
+
         # Select only needed columns
         lf = lf.select(required_cols)
-        
+
         # Handle missing distance and compute similarity weights
         if distance_col not in lf.columns:
             lf = lf.with_columns(pl.lit(2.0, dtype=pl.Float32).alias(distance_col))
-        
-        lf = lf.with_columns([
-            pl.col(distance_col).fill_null(2.0).cast(pl.Float32)
-        ]).with_columns(
+
+        lf = lf.with_columns([pl.col(distance_col).fill_null(2.0).cast(pl.Float32)]).with_columns(
             pl.max_horizontal(
                 pl.lit(1e-9, dtype=pl.Float32),
-                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32))
+                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)),
             ).alias("weight")
         )
-        
+
         # Collect with optimizations
         logger.info(f"  Processing Parquet with {cpu_count} CPU cores...")
         df = lf.collect(
@@ -542,14 +587,14 @@ def load_graph_edges_parquet() -> SimpleLoaderReturn:
             simplify_expression=True,
             slice_pushdown=True,
             comm_subplan_elim=True,
-            comm_subexpr_elim=True
+            comm_subexpr_elim=True,
         )
-        
+
         # Build graph efficiently with chunking for large datasets
         G: nx.Graph = nx.Graph()
         total_rows = len(df)
         chunk_size = 1_000_000
-        
+
         if total_rows > chunk_size:
             logger.info(f"  Processing {total_rows} edges in chunks...")
             for i in range(0, total_rows, chunk_size):
@@ -571,9 +616,9 @@ def load_graph_edges_parquet() -> SimpleLoaderReturn:
         else:
             true_labels = []
             logger.warning("Graph from Parquet is empty. No labels.")
-            
+
         return G, true_labels, False
-        
+
     except Exception as e:
         logger.error(f"Error loading graph from Parquet {file_path}: {e}", exc_info=True)
         G = nx.Graph()
@@ -606,13 +651,14 @@ def load_graph_edges_9m_parquet() -> SimpleLoaderReturn:
     """
     file_path: str = "datasets/graph_edges_9m.parquet"
     logger.info(f"Loading graph from {file_path}...")
-    
-    # Import os for CPU optimization  
+
+    # Import os for CPU optimization
     import os
+
     original_threads = os.environ.get("POLARS_MAX_THREADS")
     cpu_count = os.cpu_count() or 4
     os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
-    
+
     try:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found: {file_path}")
@@ -620,29 +666,27 @@ def load_graph_edges_9m_parquet() -> SimpleLoaderReturn:
         # Use lazy Parquet reading for better performance on large files
         lf = pl.scan_parquet(file_path)
         schema = lf.schema
-        
+
         required_cols = ["src", "dst"]
         distance_col = "distance"
-        
+
         if distance_col in schema:
             required_cols.append(distance_col)
-        
+
         # Select only needed columns
         lf = lf.select(required_cols)
-        
+
         # Handle missing distance and compute similarity weights
         if distance_col not in lf.columns:
             lf = lf.with_columns(pl.lit(2.0, dtype=pl.Float32).alias(distance_col))
-        
-        lf = lf.with_columns([
-            pl.col(distance_col).fill_null(2.0).cast(pl.Float32)
-        ]).with_columns(
+
+        lf = lf.with_columns([pl.col(distance_col).fill_null(2.0).cast(pl.Float32)]).with_columns(
             pl.max_horizontal(
                 pl.lit(1e-9, dtype=pl.Float32),
-                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32))
+                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)),
             ).alias("weight")
         )
-        
+
         # Collect with optimizations for large 9M dataset
         logger.info(f"  Processing 9M Parquet with {cpu_count} CPU cores...")
         df = lf.collect(
@@ -652,14 +696,14 @@ def load_graph_edges_9m_parquet() -> SimpleLoaderReturn:
             simplify_expression=True,
             slice_pushdown=True,
             comm_subplan_elim=True,
-            comm_subexpr_elim=True
+            comm_subexpr_elim=True,
         )
-        
+
         # Build graph efficiently with chunking for 9M dataset
         G: nx.Graph = nx.Graph()
         total_rows = len(df)
         chunk_size = 500_000  # Smaller chunks for 9M dataset
-        
+
         logger.info(f"  Processing {total_rows} edges in {chunk_size}-row chunks...")
         for i in range(0, total_rows, chunk_size):
             chunk = df.slice(i, min(chunk_size, total_rows - i))
@@ -671,7 +715,7 @@ def load_graph_edges_9m_parquet() -> SimpleLoaderReturn:
         num_nodes = G.number_of_nodes()
         num_edges = G.number_of_edges()
         logger.info(f"Created graph with {num_nodes} nodes and {num_edges} edges from 9M Parquet.")
-        
+
         true_labels: list[int]
         if num_nodes > 0:
             true_labels = [0] * num_nodes
@@ -681,7 +725,7 @@ def load_graph_edges_9m_parquet() -> SimpleLoaderReturn:
             logger.warning("Graph from 9M Parquet is empty. No labels.")
 
         return G, true_labels, False
-        
+
     except Exception as e:
         logger.error(f"Error loading graph from 9M Parquet {file_path}: {e}", exc_info=True)
         G = nx.Graph()
@@ -712,45 +756,105 @@ def load_lfr(n: int = 250, mu: float = 0.1, name: str = "LFR Benchmark") -> Simp
             - list[int]: True community labels.
             - bool: True (ground truth available).
     """
-    tau1: int = 3      # Power law exponent for degree distribution
-    tau2: int = 1.5    # Power law exponent for community size distribution
+    tau1: int = 3  # Power law exponent for degree distribution
+    tau2: int = 1.5  # Power law exponent for community size distribution
     avg_degree: int = 10
     min_comm: int = 50
     # Ensure max_community is at least min_community and reasonable for n
     max_comm: int = max(min_comm, n // 5 if n // 5 >= min_comm else min_comm + 1)
-    if n < min_comm : # Adjust if n is too small for min_community
+    if n < min_comm:  # Adjust if n is too small for min_community
         min_comm = max(1, n // 2 if n > 1 else 1)
         max_comm = n
-        logger.warning(f"LFR: n ({n}) < min_community (50). Adjusted min_community to {min_comm}, max_community to {max_comm}.")
+        logger.warning(
+            f"LFR: n ({n}) < min_community (50). Adjusted min_community to {min_comm}, max_community to {max_comm}."
+        )
 
+    def _generate_lfr_graph(
+        n_local: int, mu_local: float, min_c: int, max_c: int, avg_deg_local: int
+    ) -> nx.Graph:
+        return nx.LFR_benchmark_graph(
+            n_local,
+            tau1,
+            tau2,
+            mu_local,
+            average_degree=avg_deg_local,
+            min_community=min_c,
+            max_community=max_c,
+            seed=42,
+        )
 
-    logger.info(f"Generating {name} graph (n={n}, mu={mu}, tau1={tau1}, tau2={tau2}, avg_deg={avg_degree}, min_comm={min_comm}, max_comm={max_comm})...")
-    start_time: float = time.time()
-    
-    G: nx.Graph = nx.LFR_benchmark_graph(
-        n, tau1, tau2, mu,
-        average_degree=avg_degree,
-        min_community=min_comm,
-        max_community=max_comm,
-        seed=42
+    logger.info(
+        f"Generating {name} graph (n={n}, mu={mu}, tau1={tau1}, tau2={tau2}, avg_deg={avg_degree}, min_comm={min_comm}, max_comm={max_comm})..."
     )
+    start_time: float = time.time()
+
+    try:
+        G: nx.Graph = _generate_lfr_graph(n, mu, min_comm, max_comm, avg_degree)
+    except nx.ExceededMaxIterations:
+        # Retry with more permissive community sizes/degree for small graphs
+        min_comm_retry = max(5, n // 10)
+        max_comm_retry = max(min_comm_retry + 1, n // 2)
+        avg_degree_retry = max(4, min(8, n - 1))
+        logger.warning(
+            f"LFR: initial generation failed (ExceededMaxIterations). Retrying with "
+            f"min_comm={min_comm_retry}, max_comm={max_comm_retry}, avg_deg={avg_degree_retry}"
+        )
+        G = _generate_lfr_graph(n, mu, min_comm_retry, max_comm_retry, avg_degree_retry)
+
     gen_time: float = time.time() - start_time
-    logger.info(f"Generated {name} ({len(G.nodes())} nodes, {len(G.edges())} edges) in {format_time(gen_time)}")
-    
-    # Ensure all nodes have the "community" attribute
+    logger.info(
+        f"Generated {name} ({len(G.nodes())} nodes, {len(G.edges())} edges) in {format_time(gen_time)}"
+    )
+
+    # Robustly extract community labels (NetworkX LFR uses list/frozenset; handle both).
     true_labels: list[int] = []
     for node_id in G.nodes():
-        community_set = G.nodes[node_id].get("community")
-        if community_set is None or not isinstance(community_set, frozenset) or not community_set:
-            logger.warning(f"Node {node_id} in LFR graph missing valid 'community' attribute. Assigning to default label -1.")
-            true_labels.append(-1) # Default label for problematic nodes
-        else:
-            true_labels.append(min(list(community_set))) # Get min element from the frozenset of community IDs
+        community_attr = G.nodes[node_id].get("community")
 
-    for u,v in G.edges(): # Ensure weights for LFR if not added by default
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
-             
+        def _extract_label(obj: Any) -> int:
+            # Handle nested container (e.g., list of frozensets) or flat container of ints.
+            if obj is None:
+                return -1
+            if isinstance(obj, (set, frozenset, list, tuple)):
+                if len(obj) == 0:
+                    return -1
+                first = next(iter(obj))
+                if isinstance(first, (set, frozenset, list, tuple)):
+                    return min(first) if len(first) > 0 else -1
+                try:
+                    return int(min(obj))
+                except Exception:
+                    try:
+                        return int(first)
+                    except Exception:
+                        return -1
+            try:
+                return int(obj)
+            except Exception:
+                return -1
+
+        label_val = _extract_label(community_attr)
+        if label_val == -1:
+            logger.debug(
+                f"LFR: node {node_id} missing/invalid community attr {community_attr}; assigned -1."
+            )
+        true_labels.append(label_val)
+
+    # If community parsing failed (e.g., all -1), fall back to connected components as GT
+    if len(set(true_labels)) <= 1:
+        logger.warning(
+            "LFR: Parsed ground-truth has <=1 cluster. Falling back to connected components as GT."
+        )
+        comp_labels: dict[Any, int] = {}
+        for comp_id, comp_nodes in enumerate(nx.connected_components(G)):
+            for n in comp_nodes:
+                comp_labels[n] = comp_id
+        true_labels = [comp_labels.get(n, 0) for n in G.nodes()]
+
+    for u, v in G.edges():  # Ensure weights for LFR if not added by default
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
+
     return G, true_labels, True
 
 
@@ -767,16 +871,18 @@ def load_large_synthetic() -> SimpleLoaderReturn:
             - bool: True (ground truth available).
     """
     logger.info("Generating large synthetic SBM graph...")
-    num_nodes_total: int = 1500 
+    num_nodes_total: int = 1500
     sizes: list[int] = [50, 80, 100, 120, 70, 90, 110, 60, 150, 130, 100, 80, 120, 140, 100]
-    
+
     # Ensure total size matches num_nodes_total if it was specified, otherwise sum sizes.
     if sum(sizes) != num_nodes_total:
-        logger.warning(f"Sum of SBM community sizes ({sum(sizes)}) does not match target total nodes ({num_nodes_total}). Using sum of sizes.")
+        logger.warning(
+            f"Sum of SBM community sizes ({sum(sizes)}) does not match target total nodes ({num_nodes_total}). Using sum of sizes."
+        )
         # num_nodes_total = sum(sizes) # This line is not needed as sizes define the graph
 
     p_in: float = 0.1  # Intra-community connection probability
-    p_out: float = 0.001 # Inter-community connection probability
+    p_out: float = 0.001  # Inter-community connection probability
 
     probs: np.ndarray = np.full((len(sizes), len(sizes)), p_out)
     np.fill_diagonal(probs, p_in)
@@ -787,14 +893,18 @@ def load_large_synthetic() -> SimpleLoaderReturn:
     for i, size_val in enumerate(sizes):
         true_labels.extend([i] * size_val)
 
-    logger.info(f"Generated SBM graph with {len(G.nodes())} nodes, {len(G.edges())} edges, and {len(sizes)} communities.")
-    for u,v in G.edges(): # Ensure weights
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
+    logger.info(
+        f"Generated SBM graph with {len(G.nodes())} nodes, {len(G.edges())} edges, and {len(sizes)} communities."
+    )
+    for u, v in G.edges():  # Ensure weights
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
     return G, true_labels, True
 
 
-def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: str) -> SimpleLoaderReturn:
+def load_snap_text_dataset(
+    name: str, edge_file_base: str, community_file_base: str
+) -> SimpleLoaderReturn:
     """Generic function to load SNAP text datasets (ungraph.txt, all.cmty.txt).
 
     Handles unzipping .gz files if necessary.
@@ -811,7 +921,7 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
             - nx.Graph: The loaded graph.
             - list[int]: True community labels.
             - bool: True (ground truth available).
-            
+
     Raises:
         FileNotFoundError: If required dataset files (or their .gz versions)
                            are not found in the 'datasets/' directory.
@@ -827,6 +937,7 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
             if os.path.exists(gz_path):
                 logger.info(f"Unzipping {gz_path} to {plain_path}...")
                 import gzip
+
                 with gzip.open(gz_path, "rb") as f_in, open(plain_path, "wb") as f_out:
                     shutil.copyfileobj(f_in, f_out)
                 logger.info(f"Unzipped {gz_path} successfully.")
@@ -840,13 +951,15 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
     start_time_graph: float = time.time()
     G: nx.Graph = nx.read_edgelist(edge_file, comments="#", create_using=nx.Graph(), nodetype=int)
     load_time_graph: float = time.time() - start_time_graph
-    logger.info(f"Loaded {name} graph ({len(G.nodes())} N, {len(G.edges())} E) in {format_time(load_time_graph)}.")
+    logger.info(
+        f"Loaded {name} graph ({len(G.nodes())} N, {len(G.edges())} E) in {format_time(load_time_graph)}."
+    )
 
     logger.info(f"Loading {name} communities from {community_file}...")
     start_time_comm: float = time.time()
     raw_communities: dict[int, set[int]] = {}
     nodes_in_any_community: set[int] = set()
-    
+
     with open(community_file) as f:
         for comm_idx, line in enumerate(f):
             try:
@@ -856,9 +969,11 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
                     raw_communities[comm_idx] = current_comm_set
                     nodes_in_any_community.update(current_comm_set)
             except ValueError:
-                logger.warning(f"Skipping invalid line in {community_file} (line {comm_idx+1}): {line.strip()}")
+                logger.warning(
+                    f"Skipping invalid line in {community_file} (line {comm_idx + 1}): {line.strip()}"
+                )
                 continue
-    
+
     load_time_comm: float = time.time() - start_time_comm
     num_raw_communities: int = len(raw_communities)
     logger.info(f"Loaded {num_raw_communities} raw community groups in {format_time(load_time_comm)}.")
@@ -866,27 +981,31 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
     graph_nodes_set: set[int] = set(G.nodes())
     nodes_not_in_graph_but_in_comm: set[int] = nodes_in_any_community - graph_nodes_set
     if nodes_not_in_graph_but_in_comm:
-        logger.warning(f"{len(nodes_not_in_graph_but_in_comm)} nodes found in community file but not in graph edgelist for {name}.")
+        logger.warning(
+            f"{len(nodes_not_in_graph_but_in_comm)} nodes found in community file but not in graph edgelist for {name}."
+        )
 
     # Create true_labels for nodes present in the graph G
     # Nodes in G but not in any community will get a default label.
     # Nodes in communities but not G are ignored for labeling G's nodes.
-    
-    node_list_graph: list[int] = list(G.nodes()) # Nodes for which we need labels
+
+    node_list_graph: list[int] = list(G.nodes())  # Nodes for which we need labels
     node_to_final_idx: dict[int, int] = {node_id: i for i, node_id in enumerate(node_list_graph)}
     num_graph_nodes: int = len(node_list_graph)
-    true_labels_list: list[int] = [-1] * num_graph_nodes # Default label for 'unassigned'
+    true_labels_list: list[int] = [-1] * num_graph_nodes  # Default label for 'unassigned'
 
     # Assign community IDs. If overlapping, last seen comm_idx wins.
     # This uses the original comm_idx from the file as the label.
     actual_labels_assigned_count: int = 0
     for comm_idx, nodes_in_comm_set in raw_communities.items():
         for node_id in nodes_in_comm_set:
-            if node_id in node_to_final_idx: # If this node from community file is in our graph
+            if node_id in node_to_final_idx:  # If this node from community file is in our graph
                 final_node_idx: int = node_to_final_idx[node_id]
-                if true_labels_list[final_node_idx] == -1: # First time assigning a label to this graph node
-                    actual_labels_assigned_count +=1
-                true_labels_list[final_node_idx] = comm_idx 
+                if (
+                    true_labels_list[final_node_idx] == -1
+                ):  # First time assigning a label to this graph node
+                    actual_labels_assigned_count += 1
+                true_labels_list[final_node_idx] = comm_idx
 
     # Handle graph nodes that were not in any community
     unassigned_nodes_count: int = true_labels_list.count(-1)
@@ -895,18 +1014,22 @@ def load_snap_text_dataset(name: str, edge_file_base: str, community_file_base: 
         for lbl in true_labels_list:
             if lbl > max_assigned_label_val:
                 max_assigned_label_val = lbl
-        
+
         next_available_label: int = max_assigned_label_val + 1
         for i in range(num_graph_nodes):
             if true_labels_list[i] == -1:
                 true_labels_list[i] = next_available_label
-        logger.info(f"{unassigned_nodes_count} graph nodes were not in any listed community for {name}; assigned them to new label {next_available_label}.")
-    
-    logger.info(f"Assigned community labels to {actual_labels_assigned_count} graph nodes based on {name} community file.")
-    for u,v in G.edges(): # Ensure weights
-        if "weight" not in G.edges[u,v]:
-             G.edges[u,v]["weight"] = 1.0
-             
+        logger.info(
+            f"{unassigned_nodes_count} graph nodes were not in any listed community for {name}; assigned them to new label {next_available_label}."
+        )
+
+    logger.info(
+        f"Assigned community labels to {actual_labels_assigned_count} graph nodes based on {name} community file."
+    )
+    for u, v in G.edges():  # Ensure weights
+        if "weight" not in G.edges[u, v]:
+            G.edges[u, v]["weight"] = 1.0
+
     return G, true_labels_list, True
 
 
@@ -918,7 +1041,7 @@ def load_orkut() -> SimpleLoaderReturn:
 
     Returns:
         A tuple as per `load_snap_text_dataset`.
-            
+
     Raises:
         FileNotFoundError: If dataset files are not found.
     """
@@ -933,7 +1056,7 @@ def load_livejournal() -> SimpleLoaderReturn:
 
     Returns:
         A tuple as per `load_snap_text_dataset`.
-            
+
     Raises:
         FileNotFoundError: If dataset files are not found.
     """
@@ -943,7 +1066,7 @@ def load_livejournal() -> SimpleLoaderReturn:
 def load_graph_edges_gt_clusters(
     file_path: str = "datasets/graph_edges_gt_clusters.parquet",
     name: str = "Graph Edges GT Clusters",
-    dtype_spec: dict[str, Any] | None = None
+    dtype_spec: dict[str, Any] | None = None,
 ) -> DictLoaderReturn:
     """Load a graph and its ground truth communities from a single Parquet file.
 
@@ -967,20 +1090,29 @@ def load_graph_edges_gt_clusters(
     """
     logger.info(f"Loading {name} from {file_path}...")
     start_time: float = time.time()
-    
+
     # Import os at function level to avoid undefined variable in finally block
     import os
-    
+
     edge_id_col_1: str = "src"
     edge_id_col_2: str = "dst"
     distance_col: str = "distance"
-    gt_cluster_source_col: str = "src_cluster" # Column for GT cluster ID
+    gt_cluster_source_col: str = "src_cluster"  # Column for GT cluster ID
 
     def _create_error_return(err_msg: str) -> DictLoaderReturn:
         return {
-            "graph": None, "ground_truth": None,
-            "info": {"name": name, "load_time_s": time.time() - start_time, "nodes":0, "edges":0, "has_ground_truth":False, "num_gt_clusters":0, "num_nodes_in_gt":0},
-            "error": err_msg
+            "graph": None,
+            "ground_truth": None,
+            "info": {
+                "name": name,
+                "load_time_s": time.time() - start_time,
+                "nodes": 0,
+                "edges": 0,
+                "has_ground_truth": False,
+                "num_gt_clusters": 0,
+                "num_nodes_in_gt": 0,
+            },
+            "error": err_msg,
         }
 
     if not os.path.exists(file_path):
@@ -991,33 +1123,33 @@ def load_graph_edges_gt_clusters(
         original_threads = os.environ.get("POLARS_MAX_THREADS")
         cpu_count = os.cpu_count() or 4
         os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
-        
+
         # Configure for optimal parallel processing in Polars 1.30.0+
         pl.Config.set_streaming_chunk_size(500_000)  # Smaller chunks = more parallelism
-        
+
         # Enable aggressive memory optimization for large datasets
         original_verbose = pl.Config.state().get("verbose", False)
         pl.Config.set_verbose(False)  # Reduce memory overhead from logging
-        
+
         # Use lazy loading and streaming for memory efficiency
         required_cols = [edge_id_col_1, edge_id_col_2, gt_cluster_source_col]
-        
+
         # Check schema without loading data - scan_parquet is already optimized
         lf = pl.scan_parquet(file_path)
         schema = lf.schema
-        
+
         if distance_col in schema:
             required_cols.append(distance_col)
-        
+
         # Check essential columns early
         essential_cols = [edge_id_col_1, edge_id_col_2, gt_cluster_source_col]
         if not all(col in schema for col in essential_cols):
             missing = [col for col in essential_cols if col not in schema]
             return _create_error_return(f"Required columns missing in {file_path}: {missing}")
-        
+
         # Build lazy computation pipeline for maximum efficiency - select only needed columns
         lf = lf.select(required_cols)
-        
+
         # Apply dtype casting in lazy mode
         if dtype_spec:
             cast_exprs = []
@@ -1027,50 +1159,54 @@ def load_graph_edges_gt_clusters(
                         cast_exprs.append(pl.col(col_name).cast(pl.Utf8))
             if cast_exprs:
                 lf = lf.with_columns(cast_exprs)
-        
+
         # Handle distance column and compute weights in lazy pipeline
         if distance_col not in lf.columns:
             lf = lf.with_columns(pl.lit(2.0).alias(distance_col))
-        
+
         # Complete pipeline: nulls, types, and weight calculation with parallel processing
-        lf = lf.with_columns([
-            pl.col(distance_col).fill_null(2.0).cast(pl.Float32),  # Use Float32 for better memory efficiency
-            pl.col(gt_cluster_source_col).fill_null(-1).cast(pl.Int32)
-        ]).with_columns(
+        lf = lf.with_columns(
+            [
+                pl.col(distance_col)
+                .fill_null(2.0)
+                .cast(pl.Float32),  # Use Float32 for better memory efficiency
+                pl.col(gt_cluster_source_col).fill_null(-1).cast(pl.Int32),
+            ]
+        ).with_columns(
             # Use parallel computation for weight calculation - optimized for vectorization
             pl.max_horizontal(
-                pl.lit(1e-9, dtype=pl.Float32), 
-                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32))
+                pl.lit(1e-9, dtype=pl.Float32),
+                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)),
             ).alias("weight")
         )
-        
+
         # Execute with parallel processing for maximum speed
         # Note: Using collect() with proper parallelization settings for Polars 1.30.0+
         logger.info(f"  Starting parallel processing with {cpu_count} CPU cores...")
         df = lf.collect(
-            type_coercion=True,     # Enable type coercion optimizations
-            predicate_pushdown=True, # Push filters down to file reading
-            projection_pushdown=True, # Push column selection down to file reading
-            simplify_expression=True, # Simplify expressions for better performance
-            slice_pushdown=True,     # Push row limits down to file reading
+            type_coercion=True,  # Enable type coercion optimizations
+            predicate_pushdown=True,  # Push filters down to file reading
+            projection_pushdown=True,  # Push column selection down to file reading
+            simplify_expression=True,  # Simplify expressions for better performance
+            slice_pushdown=True,  # Push row limits down to file reading
             comm_subplan_elim=True,  # Eliminate common subplans
-            comm_subexpr_elim=True   # Eliminate common subexpressions
+            comm_subexpr_elim=True,  # Eliminate common subexpressions
         )
         logger.info(f"  Data processing completed. Building graph from {len(df)} edges...")
-        
+
         # Initialize graph
         G: nx.Graph = nx.Graph()
-        
+
         # Process large datasets in chunks to minimize memory usage
         chunk_size = 1_000_000  # Process 1M rows at a time
         total_rows = len(df)
-        
+
         if total_rows > chunk_size:
             # Process in chunks for memory efficiency
             for i in range(0, total_rows, chunk_size):
                 end_idx = min(i + chunk_size, total_rows)
                 chunk = df.slice(i, end_idx - i)
-                
+
                 # Extract edges as tuples directly - fastest for NetworkX
                 edges_chunk = chunk.select([edge_id_col_1, edge_id_col_2, "weight"]).rows()
                 G.add_weighted_edges_from(edges_chunk)
@@ -1080,17 +1216,18 @@ def load_graph_edges_gt_clusters(
             G.add_weighted_edges_from(edge_data)
 
         # Build ground truth efficiently with deduplication
-        gt_df = (df
-                 .filter(pl.col(gt_cluster_source_col) != -1)
-                 .select([edge_id_col_1, gt_cluster_source_col])
-                 .unique(subset=[edge_id_col_1], keep="last"))  # Keep last occurrence
-        
+        gt_df = (
+            df.filter(pl.col(gt_cluster_source_col) != -1)
+            .select([edge_id_col_1, gt_cluster_source_col])
+            .unique(subset=[edge_id_col_1], keep="last")
+        )  # Keep last occurrence
+
         # Convert to dict efficiently using Polars rows()
         gt_data_dict: dict[Any, int] = dict(gt_df.rows())
 
         num_nodes_val: int = G.number_of_nodes()
         num_edges_val: int = G.number_of_edges()
-        
+
         num_gt_clusters_val: int = 0
         num_nodes_in_gt_val: int = 0
         has_gt: bool = False
@@ -1098,19 +1235,32 @@ def load_graph_edges_gt_clusters(
             num_gt_clusters_val = len(set(gt_data_dict.values()))
             num_nodes_in_gt_val = len(gt_data_dict)
             has_gt = True
-            logger.info(f"  Ground truth from {file_path}: {num_gt_clusters_val} clusters for {num_nodes_in_gt_val} nodes.")
+            logger.info(
+                f"  Ground truth from {file_path}: {num_gt_clusters_val} clusters for {num_nodes_in_gt_val} nodes."
+            )
         else:
             logger.warning(f"  No ground truth data derived from {file_path}.")
 
         load_time_val: float = time.time() - start_time
-        logger.info(f"  {name} loaded: {num_nodes_val} N, {num_edges_val} E. Took {format_time(load_time_val)}.")
+        logger.info(
+            f"  {name} loaded: {num_nodes_val} N, {num_edges_val} E. Took {format_time(load_time_val)}."
+        )
 
         info_dict: dict[str, Any] = {
-            "name": name, "nodes": num_nodes_val, "edges": num_edges_val,
-            "has_ground_truth": has_gt, "num_gt_clusters": num_gt_clusters_val,
-            "num_nodes_in_gt": num_nodes_in_gt_val, "load_time_s": load_time_val
+            "name": name,
+            "nodes": num_nodes_val,
+            "edges": num_edges_val,
+            "has_ground_truth": has_gt,
+            "num_gt_clusters": num_gt_clusters_val,
+            "num_nodes_in_gt": num_nodes_in_gt_val,
+            "load_time_s": load_time_val,
         }
-        return {"graph": G if num_nodes_val > 0 else None, "ground_truth": gt_data_dict if has_gt else None, "info": info_dict, "error": None}
+        return {
+            "graph": G if num_nodes_val > 0 else None,
+            "ground_truth": gt_data_dict if has_gt else None,
+            "info": info_dict,
+            "error": None,
+        }
 
     except Exception as e:
         logger.error(f"Error loading {name} from {file_path}: {e}", exc_info=True)
@@ -1121,7 +1271,7 @@ def load_graph_edges_gt_clusters(
             os.environ["POLARS_MAX_THREADS"] = original_threads
         elif "POLARS_MAX_THREADS" in os.environ:
             del os.environ["POLARS_MAX_THREADS"]
-        
+
         # Restore verbose setting if it was changed
         try:
             pl.Config.set_verbose(original_verbose)
@@ -1132,7 +1282,7 @@ def load_graph_edges_gt_clusters(
 def load_graph_edges_llm_clusters(
     file_path: str = "datasets/graph_edges_llm_clusters.parquet",
     name: str = "Graph Edges LLM Clusters",
-    dtype_spec: dict[str, Any] | None = None
+    dtype_spec: dict[str, Any] | None = None,
 ) -> DictLoaderReturn:
     """Load LLM-generated clusters graph and its ground truth communities from Parquet.
 
@@ -1151,10 +1301,164 @@ def load_graph_edges_llm_clusters(
     return load_graph_edges_gt_clusters(file_path=file_path, name=name, dtype_spec=dtype_spec)
 
 
+def load_wiki_news_edges() -> SimpleLoaderReturn:
+    """Load graph from Wiki News edges Parquet file, calculate similarity weight from distance.
+
+    Expects 'src', 'dst', and optionally 'distance' columns.
+    Edge weights are similarity = 1 - (distance / 2.0), min 1e-9.
+    'distance' defaults to 2.0 if missing. No ground truth; dummy labels created.
+
+    Returns:
+        A tuple containing:
+            - nx.Graph: The loaded graph.
+            - list[int]: Dummy true community labels (all zeros).
+            - bool: False (no actual ground truth).
+
+    Raises:
+        FileNotFoundError: If 'datasets/wiki_news_edges_sim_thresh_0_9.parquet' is not found.
+        pl.exceptions.ComputeError: If Polars has issues reading the Parquet.
+    """
+    file_path: str = "datasets/wiki_news_edges_sim_thresh_0_9.parquet"
+    logger.info(f"Loading Wiki News graph from {file_path}...")
+
+    # Import os for CPU optimization
+    import os
+
+    original_threads = os.environ.get("POLARS_MAX_THREADS")
+    cpu_count = os.cpu_count() or 4
+    os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
+
+    try:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Dataset file not found: {file_path}")
+
+        # Use lazy Parquet reading for better performance
+        lf = pl.scan_parquet(file_path)
+        schema = lf.collect_schema()
+        schema_names = set(schema.names())
+
+        required_cols = ["src", "dst"]
+        distance_col = "distance"
+        similarity_col = "similarity"
+        src_cluster_col = "src_cluster"
+        dst_cluster_col = "dst_cluster"
+
+        if similarity_col in schema_names:
+            required_cols.append(similarity_col)
+        elif distance_col in schema_names:
+            required_cols.append(distance_col)
+        # Cluster columns (if present) for GT extraction
+        if src_cluster_col in schema_names:
+            required_cols.append(src_cluster_col)
+        if dst_cluster_col in schema_names:
+            required_cols.append(dst_cluster_col)
+
+        # Select only needed columns
+        lf = lf.select(required_cols)
+
+        # Compute weight column
+        if similarity_col in lf.columns:
+            # Use provided similarity directly as weight, enforce minimum 1e-9
+            lf = lf.with_columns(
+                pl.max_horizontal(
+                    pl.lit(1e-9, dtype=pl.Float32),
+                    pl.col(similarity_col).fill_null(1.0).cast(pl.Float32),
+                ).alias("weight")
+            )
+        else:
+            # Fall back to converting distance -> similarity
+            if distance_col not in lf.columns:
+                lf = lf.with_columns(pl.lit(2.0, dtype=pl.Float32).alias(distance_col))
+            lf = lf.with_columns([pl.col(distance_col).fill_null(2.0).cast(pl.Float32)]).with_columns(
+                pl.max_horizontal(
+                    pl.lit(1e-9, dtype=pl.Float32),
+                    (
+                        pl.lit(1.0, dtype=pl.Float32)
+                        - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)
+                    ),
+                ).alias("weight")
+            )
+
+        # Collect with optimizations
+        logger.info(f"  Processing Wiki News Parquet with {cpu_count} CPU cores...")
+        df = lf.collect(
+            type_coercion=True,
+            predicate_pushdown=True,
+            projection_pushdown=True,
+            simplify_expression=True,
+            slice_pushdown=True,
+            comm_subplan_elim=True,
+            comm_subexpr_elim=True,
+        )
+
+        # Build graph efficiently with chunking for large datasets
+        G: nx.Graph = nx.Graph()
+        total_rows = len(df)
+        chunk_size = 1_000_000
+
+        if total_rows > chunk_size:
+            logger.info(f"  Processing {total_rows} edges in chunks...")
+            for i in range(0, total_rows, chunk_size):
+                chunk = df.slice(i, min(chunk_size, total_rows - i))
+                edges_chunk = chunk.select(["src", "dst", "weight"]).rows()
+                G.add_weighted_edges_from(edges_chunk)
+                if (i // chunk_size + 1) % 5 == 0:  # Progress logging every 5 chunks
+                    logger.info(f"    Processed {i + len(chunk)} / {total_rows} edges...")
+        else:
+            edge_data = df.select(["src", "dst", "weight"]).rows()
+            G.add_weighted_edges_from(edge_data)
+
+        num_nodes = G.number_of_nodes()
+        num_edges = G.number_of_edges()
+        logger.info(
+            f"Created Wiki News graph with {num_nodes} nodes and {num_edges} edges from Parquet."
+        )
+
+        # Build ground truth from cluster columns if present
+        gt_map: dict[Any, int] = {}
+        df_cols = set(df.columns)
+        if src_cluster_col in df_cols:
+            for s, sc in df.select(["src", src_cluster_col]).rows():
+                if sc is not None:
+                    gt_map[s] = int(sc)
+        if dst_cluster_col in df_cols:
+            for d, dc in df.select(["dst", dst_cluster_col]).rows():
+                if dc is not None:
+                    gt_map[d] = int(dc)
+
+        if gt_map:
+            logger.info(f"  Derived ground truth for {len(gt_map)} nodes from cluster columns.")
+            return G, gt_map, True
+        else:
+            # Fallback: dummy labels
+            true_labels: list[int]
+            if num_nodes > 0:
+                true_labels = [0] * num_nodes
+                logger.warning(
+                    "No ground truth columns found for Wiki News dataset. Using dummy labels."
+                )
+            else:
+                true_labels = []
+                logger.warning("Wiki News graph is empty. No labels.")
+            return G, true_labels, False
+
+    except Exception as e:
+        logger.error(f"Error loading Wiki News graph from {file_path}: {e}", exc_info=True)
+        G = nx.Graph()
+        G.add_node(0)
+        return G, [0], False
+    finally:
+        # Restore thread settings
+        if original_threads is not None:
+            os.environ["POLARS_MAX_THREADS"] = original_threads
+        elif "POLARS_MAX_THREADS" in os.environ:
+            del os.environ["POLARS_MAX_THREADS"]
+
+
 def load_graph_edges_no_gt_polars(
     file_path: str = "datasets/graph_edges_no_gt.parquet",
     name: str = "Graph Edges No GT",
-    dtype_spec: dict[str, Any] | None = None
+    dtype_spec: dict[str, Any] | None = None,
 ) -> DictLoaderReturn:
     """Load a graph without ground truth from a Parquet file.
 
@@ -1176,22 +1480,32 @@ def load_graph_edges_no_gt_polars(
     """
     logger.info(f"Loading {name} (no GT) from {file_path}...")
     start_time_load_no_gt: float = time.time()
-    
+
     # Import os for CPU optimization
     import os
+
     original_threads = os.environ.get("POLARS_MAX_THREADS")
     cpu_count = os.cpu_count() or 4
     os.environ["POLARS_MAX_THREADS"] = str(cpu_count)
-    
+
     edge_id_col_1: str = "src"
     edge_id_col_2: str = "dst"
     distance_col: str = "distance"
 
     def _create_error_return_no_gt(err_msg: str) -> DictLoaderReturn:
         return {
-            "graph": None, "ground_truth": None,
-            "info": {"name": name, "load_time_s": time.time() - start_time_load_no_gt, "nodes":0, "edges":0, "has_ground_truth":False, "num_gt_clusters":0, "num_nodes_in_gt":0},
-            "error": err_msg
+            "graph": None,
+            "ground_truth": None,
+            "info": {
+                "name": name,
+                "load_time_s": time.time() - start_time_load_no_gt,
+                "nodes": 0,
+                "edges": 0,
+                "has_ground_truth": False,
+                "num_gt_clusters": 0,
+                "num_nodes_in_gt": 0,
+            },
+            "error": err_msg,
         }
 
     try:
@@ -1201,20 +1515,22 @@ def load_graph_edges_no_gt_polars(
         # Use lazy Parquet reading for better performance
         lf = pl.scan_parquet(file_path)
         schema = lf.schema
-        
+
         required_cols = [edge_id_col_1, edge_id_col_2]
-        
+
         if distance_col in schema:
             required_cols.append(distance_col)
-        
+
         # Check essential columns
         if not all(col in schema for col in [edge_id_col_1, edge_id_col_2]):
             missing_essential = [col for col in [edge_id_col_1, edge_id_col_2] if col not in schema]
-            return _create_error_return_no_gt(f"Essential columns {missing_essential} missing in {file_path}")
+            return _create_error_return_no_gt(
+                f"Essential columns {missing_essential} missing in {file_path}"
+            )
 
         # Select only needed columns
         lf = lf.select(required_cols)
-        
+
         # Apply dtype casting in lazy mode
         if dtype_spec:
             cast_exprs = []
@@ -1224,20 +1540,18 @@ def load_graph_edges_no_gt_polars(
                         cast_exprs.append(pl.col(col_name).cast(pl.Utf8))
             if cast_exprs:
                 lf = lf.with_columns(cast_exprs)
-        
+
         # Handle missing distance and compute similarity weights
         if distance_col not in lf.columns:
             lf = lf.with_columns(pl.lit(2.0, dtype=pl.Float32).alias(distance_col))
-        
-        lf = lf.with_columns([
-            pl.col(distance_col).fill_null(2.0).cast(pl.Float32)
-        ]).with_columns(
+
+        lf = lf.with_columns([pl.col(distance_col).fill_null(2.0).cast(pl.Float32)]).with_columns(
             pl.max_horizontal(
                 pl.lit(1e-9, dtype=pl.Float32),
-                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32))
+                (pl.lit(1.0, dtype=pl.Float32) - pl.col(distance_col) * pl.lit(0.5, dtype=pl.Float32)),
             ).alias("weight")
         )
-        
+
         # Collect with optimizations
         logger.info(f"  Processing {name} with {cpu_count} CPU cores...")
         df = lf.collect(
@@ -1247,14 +1561,14 @@ def load_graph_edges_no_gt_polars(
             simplify_expression=True,
             slice_pushdown=True,
             comm_subplan_elim=True,
-            comm_subexpr_elim=True
+            comm_subexpr_elim=True,
         )
-        
+
         # Build graph efficiently with chunking if needed
         G_no_gt: nx.Graph = nx.Graph()
         total_rows = len(df)
         chunk_size = 1_000_000
-        
+
         if total_rows > chunk_size:
             logger.info(f"  Processing {total_rows} edges in chunks...")
             for i in range(0, total_rows, chunk_size):
@@ -1269,14 +1583,25 @@ def load_graph_edges_no_gt_polars(
         num_edges_val_no_gt: int = G_no_gt.number_of_edges()
 
         load_time_val_no_gt: float = time.time() - start_time_load_no_gt
-        logger.info(f"  {name} loaded: {num_nodes_val_no_gt} N, {num_edges_val_no_gt} E. Took {format_time(load_time_val_no_gt)}.")
+        logger.info(
+            f"  {name} loaded: {num_nodes_val_no_gt} N, {num_edges_val_no_gt} E. Took {format_time(load_time_val_no_gt)}."
+        )
 
         info_dict_no_gt: dict[str, Any] = {
-            "name": name, "nodes": num_nodes_val_no_gt, "edges": num_edges_val_no_gt,
-            "has_ground_truth": False, "num_gt_clusters": 0,
-            "num_nodes_in_gt": 0, "load_time_s": load_time_val_no_gt
+            "name": name,
+            "nodes": num_nodes_val_no_gt,
+            "edges": num_edges_val_no_gt,
+            "has_ground_truth": False,
+            "num_gt_clusters": 0,
+            "num_nodes_in_gt": 0,
+            "load_time_s": load_time_val_no_gt,
         }
-        return {"graph": G_no_gt if num_nodes_val_no_gt > 0 else None, "ground_truth": None, "info": info_dict_no_gt, "error": None}
+        return {
+            "graph": G_no_gt if num_nodes_val_no_gt > 0 else None,
+            "ground_truth": None,
+            "info": info_dict_no_gt,
+            "error": None,
+        }
 
     except Exception as e:
         logger.error(f"Error loading {name} from {file_path}: {e}", exc_info=True)
@@ -1287,6 +1612,7 @@ def load_graph_edges_no_gt_polars(
             os.environ["POLARS_MAX_THREADS"] = original_threads
         elif "POLARS_MAX_THREADS" in os.environ:
             del os.environ["POLARS_MAX_THREADS"]
+
 
 # Example usage (for testing individual loaders)
 # if __name__ == '__main__':
@@ -1312,4 +1638,4 @@ def load_graph_edges_no_gt_polars(
 #     # elif dataset_result_no_gt["graph"] is not None:
 #     #      G_no_gt = dataset_result_no_gt["graph"]
 #     #      logger.info(f"No-GT Dataset Info: {dataset_result_no_gt['info']}")
-#     pass # End of example main 
+#     pass # End of example main

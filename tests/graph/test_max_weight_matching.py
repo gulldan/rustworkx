@@ -495,9 +495,7 @@ class TestMaxWeightMatching(unittest.TestCase):
         rx_graph = rustworkx.undirected_gnp_random_graph(10, 0.78, seed=428)
         nx_graph = networkx.Graph(list(rx_graph.edge_list()))
         nx_matches = networkx.max_weight_matching(nx_graph, maxcardinality=True)
-        rx_matches = rustworkx.max_weight_matching(
-            rx_graph, max_cardinality=True, verify_optimum=True
-        )
+        rx_matches = rustworkx.max_weight_matching(rx_graph, max_cardinality=True, verify_optimum=True)
         self.compare_rx_nx_sets(rx_graph, rx_matches, nx_matches, 428, nx_graph)
 
     def test_gnp_random_against_networkx_with_weight_max_cardinality(self):
@@ -549,7 +547,5 @@ class TestMaxWeightMatching(unittest.TestCase):
         rx_graph = rustworkx.undirected_gnm_random_graph(10, 12, seed=42)
         nx_graph = networkx.Graph(list(rx_graph.edge_list()))
         nx_matches = networkx.max_weight_matching(nx_graph, maxcardinality=True)
-        rx_matches = rustworkx.max_weight_matching(
-            rx_graph, max_cardinality=True, verify_optimum=True
-        )
+        rx_matches = rustworkx.max_weight_matching(rx_graph, max_cardinality=True, verify_optimum=True)
         self.compare_rx_nx_sets(rx_graph, rx_matches, nx_matches, 42, nx_graph)

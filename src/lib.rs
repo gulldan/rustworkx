@@ -10,8 +10,6 @@
 // License for the specific language governing permissions and limitations
 // under the License.
 
-#![allow(clippy::uninlined_format_args)]
-
 mod bisimulation;
 mod cartesian_product;
 mod centrality;
@@ -21,8 +19,10 @@ mod connectivity;
 mod dag_algo;
 mod digraph;
 mod dominance;
+mod dot_parser;
 mod dot_utils;
 mod generators;
+mod geometry;
 mod graph;
 mod graphml;
 mod isomorphism;
@@ -32,6 +32,7 @@ mod layout;
 mod line_graph;
 mod link_analysis;
 mod matching;
+mod matrix_market;
 mod planar;
 mod random_graph;
 mod score;
@@ -59,7 +60,10 @@ use layout::*;
 use line_graph::*;
 use link_analysis::*;
 
+use dot_parser::*;
+use geometry::*;
 use matching::*;
+use matrix_market::*;
 use planar::*;
 use random_graph::*;
 use shortest_path::*;
@@ -74,6 +78,7 @@ use union::*;
 use hashbrown::HashMap;
 use numpy::Complex64;
 
+use pyo3::Python;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -81,15 +86,14 @@ use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3::wrap_pymodule;
-use pyo3::Python;
 
+use petgraph::EdgeType;
 use petgraph::graph::NodeIndex;
 use petgraph::prelude::*;
 use petgraph::visit::{
     Data, EdgeIndexable, GraphBase, GraphProp, IntoEdgeReferences, IntoNodeIdentifiers, NodeCount,
     NodeIndexable,
 };
-use petgraph::EdgeType;
 
 use rustworkx_core::dag_algo::TopologicalSortError;
 use std::convert::TryFrom;
@@ -126,7 +130,7 @@ pub struct RxPyErr {
 pub type RxPyResult<T> = Result<T, RxPyErr>;
 
 fn map_dag_would_cycle<E: std::error::Error>(value: E) -> PyErr {
-    DAGWouldCycle::new_err(format!("{}", value))
+    DAGWouldCycle::new_err(format!("{value}"))
 }
 
 impl From<ContractError> for RxPyErr {
@@ -155,7 +159,7 @@ impl From<TopologicalSortError<PyErr>> for RxPyErr {
         RxPyErr {
             pyerr: match value {
                 TopologicalSortError::CycleOrBadInitialState => {
-                    PyValueError::new_err(format!("{}", value))
+                    PyValueError::new_err(format!("{value}"))
                 }
                 TopologicalSortError::KeyError(e) => e,
             },
@@ -195,7 +199,7 @@ impl IsNan for Complex64 {
         self.re.is_nan() || self.im.is_nan()
     }
 }
-pub type StablePyGraph<Ty> = StableGraph<PyObject, PyObject, Ty>;
+pub type StablePyGraph<Ty> = StableGraph<Py<PyAny>, Py<PyAny>, Ty>;
 
 pub trait NodesRemoved {
     fn nodes_removed(&self) -> bool;
@@ -210,7 +214,7 @@ where
     }
 }
 
-pub fn get_edge_iter_with_weights<G>(graph: G) -> impl Iterator<Item = (usize, usize, PyObject)>
+pub fn get_edge_iter_with_weights<G>(graph: G) -> impl Iterator<Item = (usize, usize, Py<PyAny>)>
 where
     G: GraphBase
         + IntoEdgeReferences
@@ -219,7 +223,7 @@ where
         + NodeCount
         + GraphProp
         + NodesRemoved,
-    G: Data<NodeWeight = PyObject, EdgeWeight = PyObject>,
+    G: Data<NodeWeight = Py<PyAny>, EdgeWeight = Py<PyAny>>,
 {
     let node_map: Option<HashMap<NodeIndex, usize>> = if graph.nodes_removed() {
         let mut node_hash_map: HashMap<NodeIndex, usize> =
@@ -254,8 +258,8 @@ where
 
 fn weight_callable<'p, T>(
     py: Python<'p>,
-    weight_fn: &'p Option<PyObject>,
-    weight: &PyObject,
+    weight_fn: &'p Option<Py<PyAny>>,
+    weight: &Py<PyAny>,
     default: T,
 ) -> PyResult<T>
 where
@@ -273,7 +277,7 @@ where
 pub fn edge_weights_from_callable<'p, T, Ty: EdgeType>(
     py: Python<'p>,
     graph: &StablePyGraph<Ty>,
-    weight_fn: &'p Option<PyObject>,
+    weight_fn: &'p Option<Py<PyAny>>,
     default_weight: T,
 ) -> PyResult<Vec<Option<T>>>
 where
@@ -311,11 +315,11 @@ fn is_valid_weight(val: f64) -> PyResult<f64> {
 
 pub enum CostFn {
     Default(f64),
-    PyFunction(PyObject),
+    PyFunction(Py<PyAny>),
 }
 
-impl From<PyObject> for CostFn {
-    fn from(obj: PyObject) -> Self {
+impl From<Py<PyAny>> for CostFn {
+    fn from(obj: Py<PyAny>) -> Self {
         CostFn::PyFunction(obj)
     }
 }
@@ -329,10 +333,10 @@ impl TryFrom<f64> for CostFn {
     }
 }
 
-impl TryFrom<(Option<PyObject>, f64)> for CostFn {
+impl TryFrom<(Option<Py<PyAny>>, f64)> for CostFn {
     type Error = PyErr;
 
-    fn try_from(func_or_default: (Option<PyObject>, f64)) -> Result<Self, Self::Error> {
+    fn try_from(func_or_default: (Option<Py<PyAny>>, f64)) -> Result<Self, Self::Error> {
         let (obj, val) = func_or_default;
         match obj {
             Some(obj) => Ok(CostFn::PyFunction(obj)),
@@ -342,7 +346,7 @@ impl TryFrom<(Option<PyObject>, f64)> for CostFn {
 }
 
 impl CostFn {
-    fn call(&self, py: Python, arg: &PyObject) -> PyResult<f64> {
+    fn call(&self, py: Python, arg: &Py<PyAny>) -> PyResult<f64> {
         match self {
             CostFn::Default(val) => Ok(*val),
             CostFn::PyFunction(obj) => {
@@ -357,7 +361,7 @@ impl CostFn {
 fn find_node_by_weight<Ty: EdgeType>(
     py: Python,
     graph: &StablePyGraph<Ty>,
-    obj: &PyObject,
+    obj: &Py<PyAny>,
 ) -> PyResult<Option<NodeIndex>> {
     let mut index = None;
     for node in graph.node_indices() {
@@ -542,6 +546,8 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_longest_simple_path))?;
     m.add_wrapped(wrap_pyfunction!(graph_all_simple_paths))?;
     m.add_wrapped(wrap_pyfunction!(digraph_all_simple_paths))?;
+    m.add_wrapped(wrap_pyfunction!(hyperbolic_greedy_routing))?;
+    m.add_wrapped(wrap_pyfunction!(hyperbolic_greedy_success_rate))?;
     m.add_wrapped(wrap_pyfunction!(graph_dijkstra_shortest_paths))?;
     m.add_wrapped(wrap_pyfunction!(digraph_dijkstra_shortest_paths))?;
     m.add_wrapped(wrap_pyfunction!(graph_all_shortest_paths))?;
@@ -665,6 +671,8 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(steiner_tree::steiner_tree))?;
     m.add_wrapped(wrap_pyfunction!(digraph_dfs_search))?;
     m.add_wrapped(wrap_pyfunction!(graph_dfs_search))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_bfs_layers))?;
+    m.add_wrapped(wrap_pyfunction!(graph_bfs_layers))?;
     m.add_wrapped(wrap_pyfunction!(articulation_points))?;
     m.add_wrapped(wrap_pyfunction!(bridges))?;
     m.add_wrapped(wrap_pyfunction!(biconnected_components))?;
@@ -682,6 +690,11 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(parse_node_link_json))?;
     m.add_wrapped(wrap_pyfunction!(pagerank))?;
     m.add_wrapped(wrap_pyfunction!(hits))?;
+    m.add_wrapped(wrap_pyfunction!(from_dot))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_write_matrix_market))?;
+    m.add_wrapped(wrap_pyfunction!(graph_write_matrix_market))?;
+    m.add_wrapped(wrap_pyfunction!(read_matrix_market))?;
+    m.add_wrapped(wrap_pyfunction!(read_matrix_market_file))?;
     m.add_class::<digraph::PyDiGraph>()?;
     m.add_class::<graph::PyGraph>()?;
     m.add_class::<toposort::TopologicalSorter>()?;
@@ -713,21 +726,23 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<Type>()?;
     m.add_class::<KeySpec>()?;
     m.add_wrapped(wrap_pymodule!(generators::generators))?;
-    // Create and add the community submodule
-    let sub_mod = PyModule::new(py, "community")?;
-    community_mod(py, &sub_mod)?;
-    m.add_submodule(&sub_mod)?;
+    // Add the community submodule implemented in src/community.rs
+    m.add_wrapped(wrap_pymodule!(community::community))?;
+    #[cfg(target_os = "emscripten")]
+    setup_rayon_for_pyodide();
     Ok(())
 }
 
-#[pymodule]
-fn community_mod(_py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(crate::community::cliques::find_maximal_cliques, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::cpm::cpm_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::leiden::leiden_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::louvain::louvain_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::louvain::modularity, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::lpa::label_propagation_communities, m)?)?;
-    m.add_function(wrap_pyfunction!(crate::community::lpa::lpa_modularity, m)?)?;
-    Ok(())
+#[cfg(target_os = "emscripten")]
+static PYODIDE_INIT: std::sync::Once = std::sync::Once::new();
+
+#[cfg(target_os = "emscripten")]
+pub fn setup_rayon_for_pyodide() {
+    PYODIDE_INIT.call_once(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .use_current_thread()
+            .build_global()
+            .expect("failing setting up threads for pyodide");
+    });
 }

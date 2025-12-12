@@ -14,11 +14,11 @@
 
 use std::convert::TryFrom;
 
+use crate::CostFn;
+use crate::FailedToConverge;
 use crate::digraph;
 use crate::graph;
 use crate::iterators::{CentralityMapping, EdgeCentralityMapping};
-use crate::CostFn;
-use crate::FailedToConverge;
 
 use hashbrown::HashMap;
 use petgraph::graph::NodeIndex;
@@ -433,7 +433,7 @@ pub fn digraph_closeness_centrality(
 pub fn graph_newman_weighted_closeness_centrality(
     py: Python,
     graph: &graph::PyGraph,
-    weight_fn: Option<PyObject>,
+    weight_fn: Option<Py<PyAny>>,
     wf_improved: bool,
     default_weight: f64,
     parallel_threshold: usize,
@@ -513,7 +513,7 @@ pub fn graph_newman_weighted_closeness_centrality(
 pub fn digraph_newman_weighted_closeness_centrality(
     py: Python,
     graph: &digraph::PyDiGraph,
-    weight_fn: Option<PyObject>,
+    weight_fn: Option<Py<PyAny>>,
     wf_improved: bool,
     default_weight: f64,
     parallel_threshold: usize,
@@ -714,7 +714,7 @@ pub fn digraph_edge_betweenness_centrality(
 pub fn graph_eigenvector_centrality(
     py: Python,
     graph: &graph::PyGraph,
-    weight_fn: Option<PyObject>,
+    weight_fn: Option<Py<PyAny>>,
     default_weight: f64,
     max_iter: usize,
     tol: f64,
@@ -748,8 +748,7 @@ pub fn graph_eigenvector_centrality(
                 .collect(),
         }),
         None => Err(FailedToConverge::new_err(format!(
-            "Function failed to converge on a solution in {} iterations",
-            max_iter
+            "Function failed to converge on a solution in {max_iter} iterations"
         ))),
     }
 }
@@ -801,7 +800,7 @@ pub fn graph_eigenvector_centrality(
 pub fn digraph_eigenvector_centrality(
     py: Python,
     graph: &digraph::PyDiGraph,
-    weight_fn: Option<PyObject>,
+    weight_fn: Option<Py<PyAny>>,
     default_weight: f64,
     max_iter: usize,
     tol: f64,
@@ -836,8 +835,7 @@ pub fn digraph_eigenvector_centrality(
                 .collect(),
         }),
         None => Err(FailedToConverge::new_err(format!(
-            "Function failed to converge on a solution in {} iterations",
-            max_iter
+            "Function failed to converge on a solution in {max_iter} iterations"
         ))),
     }
 }
@@ -898,8 +896,8 @@ pub fn graph_katz_centrality(
     py: Python,
     graph: &graph::PyGraph,
     alpha: f64,
-    beta: Option<PyObject>,
-    weight_fn: Option<PyObject>,
+    beta: Option<Py<PyAny>>,
+    weight_fn: Option<Py<PyAny>>,
     default_weight: f64,
     max_iter: usize,
     tol: f64,
@@ -966,8 +964,7 @@ pub fn graph_katz_centrality(
                 .collect(),
         }),
         None => Err(FailedToConverge::new_err(format!(
-            "Function failed to converge on a solution in {} iterations",
-            max_iter
+            "Function failed to converge on a solution in {max_iter} iterations"
         ))),
     }
 }
@@ -1028,8 +1025,8 @@ pub fn digraph_katz_centrality(
     py: Python,
     graph: &digraph::PyDiGraph,
     alpha: f64,
-    beta: Option<PyObject>,
-    weight_fn: Option<PyObject>,
+    beta: Option<Py<PyAny>>,
+    weight_fn: Option<Py<PyAny>>,
     default_weight: f64,
     max_iter: usize,
     tol: f64,
@@ -1097,8 +1094,7 @@ pub fn digraph_katz_centrality(
                 .collect(),
         }),
         None => Err(FailedToConverge::new_err(format!(
-            "Function failed to converge on a solution in {} iterations",
-            max_iter
+            "Function failed to converge on a solution in {max_iter} iterations"
         ))),
     }
 }

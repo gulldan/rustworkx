@@ -11,24 +11,25 @@
 // limitations under the License.
 // https://arxiv.org/abs/0803.0476
 
-use foldhash::{HashMap, HashSet, HashMapExt, HashSetExt};
+use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use petgraph::visit::EdgeRef;
 use petgraph::visit::IntoEdgeReferences;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::prelude::*;
-use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand_pcg::Pcg64;
 
 use crate::graph::PyGraph;
 use crate::weight_callable;
+
+// Type alias for RNG used in Louvain algorithm
+type LouvainRng = Pcg64;
 
 // ========================
 // Core Louvain Data Structures
 // ========================
 
 /// Represents the state of a graph for the Louvain algorithm
-#[derive(Clone, Debug)]
 struct GraphState {
     /// Number of nodes in the graph
     num_nodes: usize,
@@ -51,7 +52,7 @@ impl GraphState {
     /// # Returns
     /// * GraphState - The initialized graph state for Louvain algorithm
     /// * PyErr - If edge weights are not positive or other errors occur
-    fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: Option<&PyObject>) -> PyResult<Self> {
+    fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: &Option<Py<PyAny>>) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
         let mut adj = vec![HashMap::new(); num_nodes];
         let mut total_weight = 0.0;
@@ -68,23 +69,22 @@ impl GraphState {
         for edge in graph.graph.edge_references() {
             let u = edge.source().index();
             let v = edge.target().index();
-            let weight_payload = edge.weight();
+            let weight_obj = edge.weight();
 
-            // Call the weight function or default to 1.0
-            let weight_fn_option: Option<PyObject> = weight_fn.cloned();
-            let weight = weight_callable(py, &weight_fn_option, weight_payload, 1.0)?;
+            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
 
             if weight <= 0.0 {
                 return Err(PyValueError::new_err(
                     "Louvain algorithm requires positive edge weights.",
                 ));
             }
-
-            *adj[u].entry(v).or_insert(0.0) += weight;
-            *adj[v].entry(u).or_insert(0.0) += weight; // Undirected graph
-
-            if u <= v {
-                // Avoid double counting
+            if u == v {
+                // Self-loops are not counted in the total weight
+                *adj[u].entry(u).or_insert(0.0) += weight;
+                total_weight += 2.0 * weight;
+            } else {
+                *adj[u].entry(v).or_insert(0.0) += weight;
+                *adj[v].entry(u).or_insert(0.0) += weight; // Undirected graph
                 total_weight += 2.0 * weight; // 2m = sum of all degrees
             }
         }
@@ -134,8 +134,10 @@ impl GraphState {
             // Add original node identifiers to the new metadata
             new_node_metadata[new_node].extend(self.node_metadata[node].iter());
 
-            // Aggregate edges
-            for (&neighbor, &weight) in &self.adj[node] {
+            // Aggregate edges - iterate in sorted order for determinism
+            let mut sorted_neighbors: Vec<_> = self.adj[node].iter().collect();
+            sorted_neighbors.sort_by_key(|&(&neighbor, _)| neighbor);
+            for (&neighbor, &weight) in sorted_neighbors {
                 let neighbor_comm = node_to_comm[neighbor];
                 let new_neighbor = *comm_to_new_id.get(&neighbor_comm).unwrap();
 
@@ -157,32 +159,55 @@ impl GraphState {
 // Louvain Algorithm Implementation
 // ========================
 
-/// Calculate community weights for a node
+/// Calculate community weights for a node with insertion order tracking
 ///
 /// # Arguments
 /// * `node` - The node to calculate weights for
 /// * `node_to_comm` - Mapping of nodes to communities
 /// * `adj` - Adjacency list representation of the graph
+/// * `nx_adjacency` - Optional adjacency list from NetworkX (for matching NX behavior)
 ///
 /// # Returns
-/// * A map from community IDs to total edge weights connecting to that community
-fn get_neighbor_weights(
+/// * A tuple of (map from community IDs to weights, vector of community IDs in insertion order)
+fn get_neighbor_weights_ordered(
     node: usize,
     node_to_comm: &[usize],
     adj: &[HashMap<usize, f64>],
-) -> HashMap<usize, f64> {
+    nx_adjacency: Option<&Vec<Vec<usize>>>,
+) -> (HashMap<usize, f64>, Vec<usize>) {
     let mut weights = HashMap::new();
+    let mut order = Vec::new();
 
-    // Only include weights to neighbors, not self loops
-    for (&neighbor, &weight) in &adj[node] {
-        if node != neighbor {
-            // Skip self-loops
-            let comm = node_to_comm[neighbor];
-            *weights.entry(comm).or_insert(0.0) += weight;
+    // Use NX adjacency order if provided, otherwise use Rust HashMap order
+    if let Some(nx_adj) = nx_adjacency {
+        // Iterate in NX's adjacency order
+        for &neighbor in &nx_adj[node] {
+            if node != neighbor {
+                if let Some(&weight) = adj[node].get(&neighbor) {
+                    let comm = node_to_comm[neighbor];
+                    if !weights.contains_key(&comm) {
+                        order.push(comm);
+                    }
+                    *weights.entry(comm).or_insert(0.0) += weight;
+                }
+            }
+        }
+    } else {
+        // Sort neighbors for deterministic iteration order (after first level or when no adjacency)
+        let mut sorted_neighbors: Vec<_> = adj[node].iter().collect();
+        sorted_neighbors.sort_by_key(|&(&neighbor, _)| neighbor);
+        for (&neighbor, &weight) in sorted_neighbors {
+            if node != neighbor {
+                let comm = node_to_comm[neighbor];
+                if !weights.contains_key(&comm) {
+                    order.push(comm);
+                }
+                *weights.entry(comm).or_insert(0.0) += weight;
+            }
         }
     }
 
-    weights
+    (weights, order)
 }
 
 /// Performs one level of Louvain algorithm optimization
@@ -192,6 +217,7 @@ fn get_neighbor_weights(
 /// * `node_to_comm` - Current assignment of nodes to communities (modified in-place)
 /// * `resolution` - Resolution parameter for modularity calculation
 /// * `rng` - Random number generator for node shuffling
+/// * `nx_adjacency` - Optional adjacency list from NetworkX (for matching NX behavior)
 ///
 /// # Returns
 /// * `bool` - True if at least one node changed community
@@ -199,12 +225,11 @@ fn run_one_level(
     graph: &GraphState,
     node_to_comm: &mut [usize],
     resolution: f64,
-    rng: &mut StdRng,
+    rng: &mut LouvainRng,
+    nx_adjacency: Option<&Vec<Vec<usize>>>,
 ) -> bool {
     let m_2std = graph.total_weight; // This is 2*m_std (sum of all degrees)
     let mut moved = false;
-    let max_iterations = 10; // Maximum passes for node movement within a level
-    let mut current_iteration = 0;
 
     // Track the total degree of each community
     let mut community_degrees = HashMap::with_capacity(graph.num_nodes);
@@ -216,13 +241,12 @@ fn run_one_level(
     }
 
     let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
-    // Shuffle nodes to match networkx behavior
+    // Shuffle nodes using pure Rust RNG
     nodes.shuffle(rng);
 
     // Continue until no more moves improve modularity or max iterations reached
     loop {
         let mut nb_moves = 0;
-        current_iteration += 1;
 
         for &node in &nodes {
             let current_comm = node_to_comm[node];
@@ -233,8 +257,9 @@ fn run_one_level(
                 .entry(current_comm)
                 .and_modify(|e| *e -= node_degree);
 
-            // Calculate weights to neighboring communities
-            let neighbor_weights = get_neighbor_weights(node, node_to_comm, &graph.adj);
+            // Calculate weights to neighboring communities with insertion order
+            let (neighbor_weights, comm_order) =
+                get_neighbor_weights_ordered(node, node_to_comm, &graph.adj, nx_adjacency);
 
             // Weight to current community for removal cost calculation
 
@@ -245,24 +270,28 @@ fn run_one_level(
             // Calculate cost of removal from current community
             let weight_to_current = *neighbor_weights.get(&current_comm).unwrap_or(&0.0);
             let sum_deg_current = *community_degrees.get(&current_comm).unwrap_or(&0.0);
-            let removal_cost = -(weight_to_current / m_2std) + (resolution * sum_deg_current * node_degree / (m_2std * m_2std));
+            let removal_cost = -(weight_to_current / m_2std)
+                + (resolution * sum_deg_current * node_degree / (m_2std * m_2std));
 
-            // Iterate over neighbor communities in arbitrary order to match networkx
-            for &candidate_comm in neighbor_weights.keys() {
+            // Iterate over neighbor communities in insertion order
+            // When nx_adjacency is provided, this matches NetworkX's tie-breaking behavior
+            // Otherwise, uses Rust's HashMap iteration order (deterministic but different from NX)
+            for candidate_comm in comm_order {
                 // Skip if it's the same community
                 if candidate_comm == current_comm {
                     continue;
                 }
-                
+
                 let weight_to_comm = *neighbor_weights.get(&candidate_comm).unwrap_or(&0.0);
-                
+
                 // Get community degrees before adding node i
                 let sum_deg_target = *community_degrees.get(&candidate_comm).unwrap_or(&0.0);
-                
+
                 // Gain from adding to target community (NetworkX formula):
                 // ΔQ_add = k_i,in / (2m) - γ * (Σ_tot * k_i) / (2m)²
-                let addition_gain = (weight_to_comm / m_2std) - (resolution * sum_deg_target * node_degree / (m_2std * m_2std));
-                
+                let addition_gain = (weight_to_comm / m_2std)
+                    - (resolution * sum_deg_target * node_degree / (m_2std * m_2std));
+
                 // Total gain = removal_cost + addition_gain
                 let total_gain = removal_cost + addition_gain;
 
@@ -293,7 +322,7 @@ fn run_one_level(
         }
 
         // Break if no moves were made in this pass or max iterations reached
-        if nb_moves == 0 || current_iteration >= max_iterations {
+        if nb_moves == 0 {
             break;
         }
     }
@@ -310,21 +339,23 @@ fn run_one_level(
 /// * `resolution` - Resolution parameter for modularity
 /// * `threshold` - Threshold for modularity improvement to continue
 /// * `seed` - Optional seed for random number generation
+/// * `nx_adjacency` - Optional adjacency list from NetworkX (for matching NX behavior)
 ///
 /// # Returns
 /// * `PyResult<Vec<Vec<Vec<usize>>>>` - Partitions at each level of the algorithm
 fn run_louvain(
     py: Python,
     graph: &PyGraph,
-    weight_fn: Option<&PyObject>,
+    weight_fn: &Option<Py<PyAny>>,
     resolution: f64,
     threshold: f64,
     seed: Option<u64>,
+    nx_adjacency: Option<Vec<Vec<usize>>>,
 ) -> PyResult<Vec<Vec<Vec<usize>>>> {
-    // Initialize RNG with seed if provided
-    let mut rng = match seed {
-        Some(s) => StdRng::seed_from_u64(s),
-        None => StdRng::from_seed(rand::random()),
+    // Use pure Rust Pcg64 RNG (fast, deterministic, no Python dependency)
+    let mut rng: LouvainRng = match seed {
+        Some(s) => Pcg64::seed_from_u64(s),
+        None => Pcg64::from_os_rng(),
     };
 
     // Convert PyGraph to our internal format
@@ -341,9 +372,24 @@ fn run_louvain(
 
     // Main loop: continue until no more improvement
     let mut improvement = true;
+    let mut first_level = true;
     while improvement {
         // Run one level of the algorithm
-        improvement = run_one_level(&graph_state, &mut node_to_comm, resolution, &mut rng);
+        // Only use NX adjacency for the first level (before graph aggregation)
+        let adj_ref = if first_level {
+            nx_adjacency.as_ref()
+        } else {
+            None
+        };
+        first_level = false;
+
+        improvement = run_one_level(
+            &graph_state,
+            &mut node_to_comm,
+            resolution,
+            &mut rng,
+            adj_ref,
+        );
 
         if !improvement {
             break;
@@ -518,6 +564,9 @@ fn merge_small_communities(
 ///     seed: Optional random seed for reproducibility.
 ///     min_community_size: Optional minimum size for communities. Smaller communities
 ///         will be merged. Default is 1 (no merging).
+///     adjacency: Optional adjacency list from NetworkX for matching NX behavior.
+///         When provided, the algorithm uses this neighbor order for tie-breaking,
+///         producing results identical to NetworkX's louvain_communities.
 ///
 /// Returns:
 ///     A list of communities, where each community is a list of node indices.
@@ -528,35 +577,37 @@ fn merge_small_communities(
 ///     ValueError: If any edge has a non-positive weight.
 #[pyfunction]
 #[pyo3(
-    text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1)"
+    text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None)"
 )]
-#[pyo3(signature = (graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1))]
+#[pyo3(signature = (graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None))]
 pub fn louvain_communities(
     py: Python,
-    graph: PyObject,
-    weight_fn: Option<PyObject>,
+    graph: Py<PyAny>,
+    weight_fn: Option<Py<PyAny>>,
     resolution: f64,
     threshold: f64,
     seed: Option<u64>,
     min_community_size: Option<usize>,
+    adjacency: Option<Py<PyAny>>,
 ) -> PyResult<Vec<Vec<usize>>> {
     // Validate input graph
     let rx_mod = py.import("rustworkx")?;
     let py_graph_type = rx_mod.getattr("PyGraph")?;
     let py_digraph_type = rx_mod.getattr("PyDiGraph")?;
 
-    if graph.bind(py).is_instance(&py_digraph_type)? {
+    let bound_graph = graph.bind(py);
+    if bound_graph.is_instance(&py_digraph_type)? {
         return Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "Louvain method is not implemented for directed graphs (PyDiGraph).",
         ));
     }
-    if !graph.bind(py).is_instance(&py_graph_type)? {
+    if !bound_graph.is_instance(&py_graph_type)? {
         return Err(pyo3::exceptions::PyTypeError::new_err(
             "Input must be a PyGraph instance.",
         ));
     }
 
-    let graph_ref = graph.extract::<PyGraph>(py)?;
+    let graph_ref = bound_graph.extract::<PyGraph>()?;
 
     // Handle empty graph
     if graph_ref.graph.node_count() == 0 {
@@ -564,13 +615,28 @@ pub fn louvain_communities(
     }
 
     // Handle weight function
-    let weight_fn_ref = weight_fn.as_ref();
 
     // Set min_community_size to 1 by default (meaning no merging)
     let min_size = min_community_size.unwrap_or(1);
 
+    // Parse adjacency list if provided
+    let nx_adjacency: Option<Vec<Vec<usize>>> = if let Some(adj_obj) = &adjacency {
+        let adj_list: Vec<Vec<usize>> = adj_obj.extract(py)?;
+        Some(adj_list)
+    } else {
+        None
+    };
+
     // Run the algorithm
-    let partitions = run_louvain(py, &graph_ref, weight_fn_ref, resolution, threshold, seed)?;
+    let partitions = run_louvain(
+        py,
+        &graph_ref,
+        &weight_fn,
+        resolution,
+        threshold,
+        seed,
+        nx_adjacency,
+    )?;
 
     // Get the final partition
     let result = if partitions.is_empty() {
@@ -626,14 +692,19 @@ pub fn louvain_communities(
 #[pyo3(signature = (graph, partition, /, weight_fn=None, resolution=1.0))]
 pub fn modularity(
     py: Python,
-    graph: PyObject,
+    graph: Py<PyAny>,
     partition: Vec<Vec<usize>>,
-    weight_fn: Option<PyObject>,
+    weight_fn: Option<Py<PyAny>>,
     resolution: Option<f64>,
 ) -> PyResult<f64> {
     // 1) Validate graph type
-    if !graph.bind(py).is_instance(&py.import("rustworkx")?.getattr("PyGraph")?)? {
-        return Err(pyo3::exceptions::PyTypeError::new_err("Input must be PyGraph"));
+    if !graph
+        .bind(py)
+        .is_instance(&py.import("rustworkx")?.getattr("PyGraph")?)?
+    {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "Input must be PyGraph",
+        ));
     }
     let pyg: PyGraph = graph.extract(py)?;
 
@@ -642,31 +713,44 @@ pub fn modularity(
     let mut node_to_comm = vec![usize::MAX; n];
     for (cid, comm) in partition.iter().enumerate() {
         for &idx in comm {
-            if idx >= n { return Err(pyo3::exceptions::PyValueError::new_err("Node index out of bounds in partition.")); }
+            if idx >= n {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "Node index out of bounds in partition.",
+                ));
+            }
             if node_to_comm[idx] != usize::MAX {
-                return Err(pyo3::exceptions::PyValueError::new_err("Node belongs to more than one community in partition."));
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "Node belongs to more than one community in partition.",
+                ));
             }
             node_to_comm[idx] = cid;
         }
     }
     if node_to_comm.iter().any(|&c| c == usize::MAX) {
-        return Err(pyo3::exceptions::PyValueError::new_err("Partition is not a complete partition of the graph."));
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Partition is not a complete partition of the graph.",
+        ));
     }
 
     // 3) Create GraphState and call the core modularity function
-    let gs = GraphState::from_pygraph(py, &pyg, weight_fn.as_ref())?;
-    Ok(modularity_core(&gs, &node_to_comm, resolution.unwrap_or(1.0)))
+    let gs = GraphState::from_pygraph(py, &pyg, &weight_fn)?;
+    Ok(modularity_core(
+        &gs,
+        &node_to_comm,
+        resolution.unwrap_or(1.0),
+    ))
 }
-
 
 fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     // Newman-Girvan modularity: Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
     // where m is the total weight of edges (not the sum of degrees!)
-    let m = gs.total_weight / 2.0;  // gs.total_weight is the sum of degrees, so divide by 2 for m
-    if m == 0.0 { return 0.0; }
+    let m = gs.total_weight / 2.0; // gs.total_weight is the sum of degrees, so divide by 2 for m
+    if m == 0.0 {
+        return 0.0;
+    }
 
-    let mut l_c: HashMap<usize, f64> = HashMap::new();   // internal edge weights of communities
-    let mut k_c: HashMap<usize, f64> = HashMap::new();   // sum of degrees of communities
+    let mut l_c: HashMap<usize, f64> = HashMap::new(); // internal edge weights of communities
+    let mut k_c: HashMap<usize, f64> = HashMap::new(); // sum of degrees of communities
 
     // First, calculate the sum of degrees for each community
     for node in 0..gs.num_nodes {
@@ -678,10 +762,10 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     // Now, calculate the internal edge weights for each community
     for u in 0..gs.num_nodes {
         let u_comm = node_to_comm[u];
-        
+
         for (&v, &weight) in &gs.adj[u] {
             let v_comm = node_to_comm[v];
-            
+
             // If an edge is within a community, add its weight to the internal weight.
             // Count each edge only once (u <= v).
             if u_comm == v_comm && u <= v {
@@ -693,16 +777,16 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     // Final calculation: Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
     let mut q = 0.0;
     let mut processed_communities = std::collections::HashSet::new();
-    
+
     for &comm_id in node_to_comm.iter() {
         if processed_communities.contains(&comm_id) {
             continue; // Community already processed
         }
         processed_communities.insert(comm_id);
-        
+
         let lc = *l_c.get(&comm_id).unwrap_or(&0.0);
         let kc = *k_c.get(&comm_id).unwrap_or(&0.0);
-        
+
         q += (lc / m) - gamma * (kc / (2.0 * m)).powi(2);
     }
 

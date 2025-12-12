@@ -18,8 +18,8 @@ members = [
 
 [workspace.package]
 version = "0.17.1"
-edition = "2021"
-rust-version = "1.79"
+edition = "2024"
+rust-version = "1.85"
 authors = ["Matthew Treinish <mtreinish@kortar.org>"]
 repository = "https://github.com/Qiskit/rustworkx"
 license = "Apache-2.0"
@@ -30,9 +30,9 @@ fixedbitset = "0.5.7"
 indexmap = { version = ">=1.9, <3", features = ["rayon"] }
 ndarray = { version = "0.16.1", features = ["rayon"] }
 num-traits = "0.2"
-petgraph = "0.8.2"
+petgraph = "0.8"
 hashbrown = { version = ">=0.13, <0.16", features = ["rayon"] }
-numpy = "0.25"
+numpy = "0.26"
 rand = "0.9"
 rand_distr = "0.5"
 rand_pcg = "0.9"
@@ -61,13 +61,16 @@ rand_pcg.workspace = true
 rayon.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-smallvec = { version = "1.15", features = ["union"] }
+smallvec = { version = "1.0", features = ["union"] }
 rustworkx-core = { path = "rustworkx-core", version = "=0.17.1" }
-flate2 = "1.1.2"
+flate2 = "1.0.35"
+pest = "2.8"
+pest_derive = "2.8"
+nalgebra-sparse = { version = "=0.10", features = ["io"] }
 
 [dependencies.pyo3]
-version = "0.25"
-features = ["abi3-py311", "extension-module", "hashbrown", "num-bigint", "num-complex", "indexmap", "py-clone"]
+version = "0.26"
+features = ["abi3-py39", "extension-module", "hashbrown", "num-bigint", "num-complex", "indexmap", "py-clone"]
 
 [dependencies.sprs]
 version = "^0.11"
@@ -75,5 +78,5 @@ default-features = false
 features = ["multi_thread"]
 
 [profile.release]
-lto = 'fat'
+lto = "fat"
 codegen-units = 1

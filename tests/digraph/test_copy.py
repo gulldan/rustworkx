@@ -72,7 +72,5 @@ class TestCopy(unittest.TestCase):
         self.assertIs(graph_a.attrs, graph_b.attrs)
         self.assertEqual(graph_a[node_a], graph_b[node_a])
         self.assertIs(graph_a[node_a], graph_b[node_a])
-        self.assertEqual(
-            graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b)
-        )
+        self.assertEqual(graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b))
         self.assertIs(graph_a.get_edge_data(node_a, node_b), graph_b.get_edge_data(node_a, node_b))

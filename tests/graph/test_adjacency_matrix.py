@@ -282,16 +282,12 @@ class TestFromComplexAdjacencyMatrix(unittest.TestCase):
         min_matrix = rustworkx.graph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="min"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 1.0, 1.0], [1.0, 0.0, 2.0], [1.0, 2.0, 0.0]], min_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 1.0, 1.0], [1.0, 0.0, 2.0], [1.0, 2.0, 0.0]], min_matrix)
 
         max_matrix = rustworkx.graph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="max"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 4.0, 2.0], [4.0, 0.0, 7.0], [2.0, 7.0, 0.0]], max_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 4.0, 2.0], [4.0, 0.0, 7.0], [2.0, 7.0, 0.0]], max_matrix)
 
         avg_matrix = rustworkx.graph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="avg"
@@ -303,11 +299,7 @@ class TestFromComplexAdjacencyMatrix(unittest.TestCase):
         sum_matrix = rustworkx.graph_adjacency_matrix(
             graph, weight_fn=lambda x: float(x), parallel_edge="sum"
         )
-        np.testing.assert_array_equal(
-            [[0.0, 8.0, 3.0], [8.0, 0.0, 9.0], [3.0, 9.0, 0.0]], sum_matrix
-        )
+        np.testing.assert_array_equal([[0.0, 8.0, 3.0], [8.0, 0.0, 9.0], [3.0, 9.0, 0.0]], sum_matrix)
 
         with self.assertRaises(ValueError):
-            rustworkx.graph_adjacency_matrix(
-                graph, weight_fn=lambda x: float(x), parallel_edge="error"
-            )
+            rustworkx.graph_adjacency_matrix(graph, weight_fn=lambda x: float(x), parallel_edge="error")

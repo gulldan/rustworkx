@@ -292,9 +292,7 @@ class TestFloydWarshall(unittest.TestCase):
     def test_floyd_warshall_successors_numpy(self):
         graph = rustworkx.PyDiGraph()
         graph.add_nodes_from(list(range(9)))
-        graph.add_edges_from_no_data(
-            [(1, 2), (1, 7), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (0, 8)]
-        )
+        graph.add_edges_from_no_data([(1, 2), (1, 7), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (0, 8)])
         dist, succ = rustworkx.floyd_warshall_successor_and_distance(
             graph, default_weight=2, parallel_threshold=self.parallel_threshold
         )

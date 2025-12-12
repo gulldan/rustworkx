@@ -31,9 +31,7 @@ class TestBipartite(unittest.TestCase):
     def test_two_colors_with_isolates(self):
         graph = rustworkx.generators.directed_star_graph(5)
         graph.add_nodes_from(range(3))
-        self.assertEqual(
-            rustworkx.two_color(graph), {0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1, 6: 1, 7: 1}
-        )
+        self.assertEqual(rustworkx.two_color(graph), {0: 1, 1: 0, 2: 0, 3: 0, 4: 0, 5: 1, 6: 1, 7: 1})
 
     def test_is_bipartite_with_isolates(self):
         graph = rustworkx.generators.directed_star_graph(5)

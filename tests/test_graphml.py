@@ -127,9 +127,7 @@ class TestGraphML(unittest.TestCase):
             rustworkx.write_graphml(graph, fd.name, keys=keys)
             graphml = rustworkx.read_graphml(fd.name)
         graph_reread = graphml[0]
-        edges = [
-            (graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()
-        ]
+        edges = [(graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()]
         self.assertGraphEqual(graph_reread, graph.nodes(), edges, attrs={"id": "G"}, directed=False)
 
     def test_write_without_keys(self):
@@ -143,9 +141,7 @@ class TestGraphML(unittest.TestCase):
             rustworkx.write_graphml(graph, fd.name)
             graphml = rustworkx.read_graphml(fd.name)
         graph_reread = graphml[0]
-        edges = [
-            (graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()
-        ]
+        edges = [(graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()]
         self.assertGraphEqual(graph_reread, graph.nodes(), edges, attrs={"id": "G"}, directed=False)
 
     def test_gzipped(self):
@@ -207,9 +203,7 @@ class TestGraphML(unittest.TestCase):
             rustworkx.write_graphml(graph, newname)
             graphml = rustworkx.read_graphml(newname)
         graph_reread = graphml[0]
-        edges = [
-            (graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()
-        ]
+        edges = [(graph[s]["id"], graph[t]["id"], weight) for s, t, weight in graph.weighted_edge_list()]
         self.assertGraphEqual(graph_reread, graph.nodes(), edges, attrs={"id": "G"}, directed=False)
 
     def graphml_xml_example_multiple_graphs(self):
@@ -285,9 +279,7 @@ class TestGraphML(unittest.TestCase):
             graph = graphml[0]
             nodes = [{"id": "n0"}]
             edges = []
-            self.assertGraphEqual(
-                graph, nodes, edges, directed=True, attrs={"id": "G", "test": True}
-            )
+            self.assertGraphEqual(graph, nodes, edges, directed=True, attrs={"id": "G", "test": True})
 
     def test_write_key_for_graph(self):
         graph_xml = self.HEADER.format(

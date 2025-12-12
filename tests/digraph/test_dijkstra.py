@@ -48,9 +48,7 @@ class TestDijkstraDiGraph(unittest.TestCase):
         g = rustworkx.PyDiGraph()
         a = g.add_node("A")
         b = g.add_node("B")
-        path_lengths = rustworkx.digraph_dijkstra_shortest_path_lengths(
-            g, a, edge_cost_fn=float, goal=b
-        )
+        path_lengths = rustworkx.digraph_dijkstra_shortest_path_lengths(g, a, edge_cost_fn=float, goal=b)
         expected = {}
         self.assertEqual(expected, path_lengths)
 

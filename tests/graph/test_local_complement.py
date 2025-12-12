@@ -62,9 +62,7 @@ class TestLocalComplement(unittest.TestCase):
     def test_local_complement(self):
         # Example took from https://arxiv.org/abs/1910.03969, figure 1
         graph = rustworkx.PyGraph(multigraph=False)
-        graph.extend_from_edge_list(
-            [(0, 1), (0, 3), (0, 5), (1, 2), (2, 3), (2, 4), (3, 4), (3, 5)]
-        )
+        graph.extend_from_edge_list([(0, 1), (0, 3), (0, 5), (1, 2), (2, 3), (2, 4), (3, 4), (3, 5)])
 
         expected_graph = rustworkx.PyGraph(multigraph=False)
         expected_graph.extend_from_edge_list(

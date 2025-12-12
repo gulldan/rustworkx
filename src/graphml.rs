@@ -22,29 +22,29 @@ use std::num::{ParseFloatError, ParseIntError};
 use std::path::Path;
 use std::str::ParseBoolError;
 
+use flate2::Compression;
 use flate2::bufread::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
 use hashbrown::HashSet;
 
 use indexmap::map::Entry;
 
+use quick_xml::Error as XmlError;
 use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
 use quick_xml::name::QName;
-use quick_xml::Error as XmlError;
 use quick_xml::{Reader, Writer};
 
 use petgraph::algo;
 use petgraph::{Directed, EdgeType, Undirected};
 
-use pyo3::exceptions::PyException;
-use pyo3::prelude::*;
 use pyo3::IntoPyObjectExt;
 use pyo3::PyErr;
+use pyo3::exceptions::PyException;
+use pyo3::prelude::*;
 
 use rustworkx_core::dictmap::{DictMap, InitWithHasher};
 
-use crate::{digraph::PyDiGraph, graph::PyGraph, StablePyGraph};
+use crate::{StablePyGraph, digraph::PyDiGraph, graph::PyGraph};
 
 pub enum Error {
     Xml(String),
@@ -58,35 +58,35 @@ pub enum Error {
 impl From<XmlError> for Error {
     #[inline]
     fn from(e: XmlError) -> Error {
-        Error::Xml(format!("Xml document not well-formed: {}", e))
+        Error::Xml(format!("Xml document not well-formed: {e}"))
     }
 }
 
 impl From<ParseBoolError> for Error {
     #[inline]
     fn from(e: ParseBoolError) -> Error {
-        Error::ParseValue(format!("Failed conversion to 'bool': {}", e))
+        Error::ParseValue(format!("Failed conversion to 'bool': {e}"))
     }
 }
 
 impl From<ParseIntError> for Error {
     #[inline]
     fn from(e: ParseIntError) -> Error {
-        Error::ParseValue(format!("Failed conversion to 'int' or 'long': {}", e))
+        Error::ParseValue(format!("Failed conversion to 'int' or 'long': {e}"))
     }
 }
 
 impl From<ParseFloatError> for Error {
     #[inline]
     fn from(e: ParseFloatError) -> Error {
-        Error::ParseValue(format!("Failed conversion to 'float' or 'double': {}", e))
+        Error::ParseValue(format!("Failed conversion to 'float' or 'double': {e}"))
     }
 }
 
 impl From<std::io::Error> for Error {
     #[inline]
     fn from(e: std::io::Error) -> Error {
-        Error::IO(format!("Input/output error: {}", e))
+        Error::IO(format!("Input/output error: {e}"))
     }
 }
 
@@ -186,7 +186,7 @@ enum Value {
 }
 
 impl Value {
-    fn serialize(&self) -> Option<Cow<str>> {
+    fn serialize(&self) -> Option<Cow<'_, str>> {
         match self {
             Value::Boolean(val) => Some(Cow::from(val.to_string())),
             Value::Int(val) => Some(Cow::from(val.to_string())),
@@ -522,7 +522,7 @@ impl Graph {
         py: Python<'_>,
         dir: Direction,
         pygraph: &StablePyGraph<Ty>,
-        attrs: &PyObject,
+        attrs: &Py<PyAny>,
     ) -> PyResult<Self> {
         let mut attrs: Option<DictMap<String, Value>> = attrs.extract(py).ok();
         let id = attrs
@@ -548,14 +548,16 @@ impl Graph {
         let mut node_ids = DictMap::new();
         let mut fresh_index_counter = 0;
         for (node_index, element_info) in node_infos.vec {
-            let id = element_info.id.unwrap_or_else(|| loop {
-                let id = format!("n{fresh_index_counter}");
-                fresh_index_counter += 1;
-                if node_infos.id_taken.contains(&id) {
-                    continue;
+            let id = element_info.id.unwrap_or_else(|| {
+                loop {
+                    let id = format!("n{fresh_index_counter}");
+                    fresh_index_counter += 1;
+                    if node_infos.id_taken.contains(&id) {
+                        continue;
+                    }
+                    node_infos.id_taken.insert(id.clone());
+                    break id;
                 }
-                node_infos.id_taken.insert(id.clone());
-                break id;
             });
             graph.nodes.push(Node {
                 id: id.clone(),
@@ -773,8 +775,7 @@ impl GraphML {
             b"long" => Type::Long,
             _ => {
                 return Err(Error::InvalidDoc(format!(
-                    "Invalid 'attr.type' attribute in key with id={}.",
-                    id,
+                    "Invalid 'attr.type' attribute in key with id={id}.",
                 )));
             }
         };
@@ -788,7 +789,7 @@ impl GraphML {
             .as_bytes()
             .try_into()
             .map_err(|()| {
-                Error::InvalidDoc(format!("Invalid 'for' attribute in key with id={}.", id,))
+                Error::InvalidDoc(format!("Invalid 'for' attribute in key with id={id}.",))
             })?;
         self.get_keys_mut(domain).insert(id, key);
         Ok(domain)
@@ -810,7 +811,7 @@ impl GraphML {
             None => self
                 .key_for_nodes
                 .get(key)
-                .ok_or_else(|| Error::NotFound(format!("Key '{}' for nodes not found.", key)))?,
+                .ok_or_else(|| Error::NotFound(format!("Key '{key}' for nodes not found.")))?,
         };
 
         if let Some(graph) = self.graphs.last_mut() {
@@ -826,7 +827,7 @@ impl GraphML {
             None => self
                 .key_for_edges
                 .get(key)
-                .ok_or_else(|| Error::NotFound(format!("Key '{}' for edges not found.", key)))?,
+                .ok_or_else(|| Error::NotFound(format!("Key '{key}' for edges not found.")))?,
         };
 
         if let Some(graph) = self.graphs.last_mut() {
@@ -842,7 +843,7 @@ impl GraphML {
             None => self
                 .key_for_graph
                 .get(key)
-                .ok_or_else(|| Error::NotFound(format!("Key '{}' for graph not found.", key)))?,
+                .ok_or_else(|| Error::NotFound(format!("Key '{key}' for graph not found.")))?,
         };
 
         if let Some(graph) = self.graphs.last_mut() {
@@ -1290,7 +1291,32 @@ impl KeySpec {
     }
 }
 
-/// Write a graph to a file in GraphML format given the list of key definitions.
+/// Write a graph to a file in GraphML format.
+///
+/// GraphML is a comprehensive and easy-to-use file format for graphs. It consists
+/// of a language core to describe the structural properties of a graph and a flexible
+/// extension mechanism to add application-specific data.
+///
+/// For more information see:
+/// http://graphml.graphdrawing.org/
+///
+/// .. note::
+///
+///     This implementation does not support mixed graphs (directed and undirected edges together),
+///     hyperedges, nested graphs, or ports.
+///
+/// .. note::
+///
+///     GraphML attributes with `graph` domain are written from :attr:`~.PyGraph.attrs` field.
+///
+/// :param PyGraph graph: The graph to write to the file.
+/// :param str path: The path of the output file to write.
+/// :param Optional[list[GraphMLKey]] keys: Optional list of key definitions for GraphML attributes.
+///                                         If None, keys will be inferred from the graph data.
+/// :param Optional[str] compression: Optional compression format for the output file.
+///                                  If None, no compression is applied.
+///
+/// :raises RuntimeError: when an error is encountered while writing the GraphML file.
 #[pyfunction]
 #[pyo3(signature=(graph, path, keys=None, compression=None),text_signature = "(graph, path, /, keys=None, compression=None)")]
 pub fn graph_write_graphml(
@@ -1307,7 +1333,32 @@ pub fn graph_write_graphml(
     Ok(())
 }
 
-/// Write a digraph to a file in GraphML format given the list of key definitions.
+/// Write a graph to a file in GraphML format.
+///
+/// GraphML is a comprehensive and easy-to-use file format for graphs. It consists
+/// of a language core to describe the structural properties of a graph and a flexible
+/// extension mechanism to add application-specific data.
+///
+/// For more information see:
+/// http://graphml.graphdrawing.org/
+///
+/// .. note::
+///
+///     This implementation does not support mixed graphs (directed and undirected edges together),
+///     hyperedges, nested graphs, or ports.
+///
+/// .. note::
+///
+///     GraphML attributes with `graph` domain are written from :attr:`~.PyGraph.attrs` field.
+///
+/// :param PyDiGraph graph: The graph to write to the file.
+/// :param str path: The path of the output file to write.
+/// :param Optional[list[GraphMLKey]] keys: Optional list of key definitions for GraphML attributes.
+///                                         If None, keys will be inferred from the graph data.
+/// :param Optional[str] compression: Optional compression format for the output file.
+///                                  If None, no compression is applied.
+///
+/// :raises RuntimeError: when an error is encountered while writing the GraphML file.
 #[pyfunction]
 #[pyo3(signature=(graph, path, keys=None, compression=None),text_signature = "(graph, path, /, keys=None, compression=None)")]
 pub fn digraph_write_graphml(

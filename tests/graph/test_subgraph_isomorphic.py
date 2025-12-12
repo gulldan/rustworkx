@@ -35,9 +35,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertTrue(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_subgraph_isomorphic_identical(self):
@@ -85,9 +83,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertFalse(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_subgraph_isomorphic_compare_nodes_identical(self):
@@ -108,9 +104,7 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         for id_order in [False, True]:
             with self.subTest(id_order=id_order):
                 self.assertTrue(
-                    rustworkx.is_subgraph_isomorphic(
-                        g_a, g_b, lambda x, y: x == y, id_order=id_order
-                    )
+                    rustworkx.is_subgraph_isomorphic(g_a, g_b, lambda x, y: x == y, id_order=id_order)
                 )
 
     def test_is_subgraph_isomorphic_nodes_compare_raises(self):
@@ -290,7 +284,5 @@ class TestSubgraphIsomorphic(unittest.TestCase):
         second = rustworkx.PyGraph()
         second.add_nodes_from([0, 1, 2, 3])
         second.add_edges_from_no_data([(0, 1), (0, 2), (1, 3)])
-        mapping = rustworkx.graph_vf2_mapping(
-            first, second, subgraph=True, id_order=True, induced=False
-        )
+        mapping = rustworkx.graph_vf2_mapping(first, second, subgraph=True, id_order=True, induced=False)
         self.assertEqual(next(mapping), {0: 0, 1: 2, 2: 1, 3: 3})
