@@ -12,12 +12,12 @@
 from .visit import BFSVisitor, DFSVisitor, DijkstraVisitor
 from types import GenericAlias
 from typing import (
-    Callable,
     final,
     Any,
     Generic,
     overload,
 )
+from collections.abc import Callable
 from collections.abc import (
     Iterable,
     Iterator,
@@ -1087,6 +1087,18 @@ _BFSVisitor = TypeVar("_BFSVisitor", bound=BFSVisitor, default=BFSVisitor)
 _DFSVisitor = TypeVar("_DFSVisitor", bound=DFSVisitor, default=DFSVisitor)
 _DijkstraVisitor = TypeVar("_DijkstraVisitor", bound=DijkstraVisitor, default=DijkstraVisitor)
 
+def digraph_generate_random_path(
+    graph: PyDiGraph,
+    source: int,
+    length: int,
+    seed: int | None = None,
+) -> Sequence[int]: ...
+def graph_generate_random_path(
+    graph: PyGraph,
+    source: int,
+    length: int,
+    seed: int | None = None,
+) -> Sequence[int]: ...
 def digraph_bfs_search(
     graph: PyDiGraph,
     source: Sequence[int] | None = ...,
@@ -1387,6 +1399,8 @@ class PyGraph(Generic[_S, _T]):
         comment: str | None = ...,
         deliminator: str | None = ...,
         labels: bool = ...,
+        multigraph: bool = ...,
+        allow_self_loops: bool = ...,
     ) -> PyGraph: ...
     def remove_edge(self, node_a: int, node_b: int, /) -> None: ...
     def remove_edge_from_index(self, edge: int, /) -> None: ...
@@ -1575,6 +1589,8 @@ class PyDiGraph(Generic[_S, _T]):
         comment: str | None = ...,
         deliminator: str | None = ...,
         labels: bool = ...,
+        multigraph: bool = ...,
+        allow_self_loops: bool = ...,
     ) -> PyDiGraph: ...
     def remove_edge(self, parent: int, child: int, /) -> None: ...
     def remove_edge_from_index(self, edge: int, /) -> None: ...

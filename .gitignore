@@ -24,7 +24,4 @@ retworkx/*pyd
 rustworkx-core/Cargo.lock
 **/.DS_Store
 venv/
-target
-.pytest_cache/
-datasets
-.ruff_cache
+.python-version

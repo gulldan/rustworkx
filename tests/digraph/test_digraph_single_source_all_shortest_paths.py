@@ -31,7 +31,9 @@ class TestDigraphSingleSourceAllShortestPaths(unittest.TestCase):
         self.assertEqual(paths[2], expected[2])
 
     def test_single_source_all_shortest_paths_directed(self):
-        paths = rustworkx.digraph_single_source_all_shortest_paths(self.directed, self.directed_nodes[0])
+        paths = rustworkx.digraph_single_source_all_shortest_paths(
+            self.directed, self.directed_nodes[0]
+        )
         expected = {0: [[0]], 1: [[0, 1]], 2: [[0, 2]], 3: [[0, 1, 3], [0, 2, 3]]}
         self.assertEqual(sorted(paths[3]), sorted(expected[3]))
 
@@ -62,7 +64,9 @@ class TestDigraphSingleSourceAllShortestPaths(unittest.TestCase):
         source = nodes[0]
 
         # Compute shortest path lengths using Dijkstra's algorithm
-        shortest_lengths = rustworkx.digraph_dijkstra_shortest_path_lengths(graph, source, lambda e: e)
+        shortest_lengths = rustworkx.digraph_dijkstra_shortest_path_lengths(
+            graph, source, lambda e: e
+        )
 
         # Compute all shortest paths
         all_shortest_paths = rustworkx.digraph_single_source_all_shortest_paths(graph, source)

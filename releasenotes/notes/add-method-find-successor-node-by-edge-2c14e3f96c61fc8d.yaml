@@ -1,7 +1,0 @@
----
-features:
-  - |
-    Added new function: :func:`~find_successor_node_by_edge`
-    to the ``rustworkx.PyDiGraph`` class.
-    This function finds an arbitrary successor node that is connected
-    by an edge that matches given condition.

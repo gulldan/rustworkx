@@ -18,6 +18,7 @@ import rustworkx as rx
 
 
 class TestHyperbolicGreedyRouting(unittest.TestCase):
+
     def test_invalid_node_error(self):
         graph = rx.PyGraph()
         positions = []
@@ -101,7 +102,10 @@ class TestHyperbolicGreedyRouting(unittest.TestCase):
             x_array = np.asarray(x)
             y_array = np.asarray(y)
             dot = np.sum(x_array * y_array)
-            arg = np.sqrt(1 + np.sum(x_array * x_array)) * np.sqrt(1 + np.sum(y_array * y_array)) - dot
+            arg = (
+                np.sqrt(1 + np.sum(x_array * x_array)) * np.sqrt(1 + np.sum(y_array * y_array))
+                - dot
+            )
             return 0 if arg < 0 else np.arccosh(arg)
 
         def total_length(path):
