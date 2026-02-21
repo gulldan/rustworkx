@@ -301,20 +301,27 @@ impl GraphState {
     }
 
     fn collapse_with_membership(&self, membership: &[usize]) -> (Self, Vec<usize>) {
-        let mut unique_comms: Vec<usize> = membership
+        let max_comm = membership
             .iter()
             .copied()
             .filter(|&c| c != UNASSIGNED)
-            .collect();
-        unique_comms.sort_unstable();
-        unique_comms.dedup();
-
-        let mut comm_to_new_id: HashMap<usize, usize> = HashMap::with_capacity(unique_comms.len());
-        for (new_id, old_id) in unique_comms.into_iter().enumerate() {
-            comm_to_new_id.insert(old_id, new_id);
+            .max()
+            .unwrap_or(0);
+        let mut comm_present = vec![false; max_comm + 1];
+        for &comm in membership {
+            if comm != UNASSIGNED {
+                comm_present[comm] = true;
+            }
         }
 
-        let num_communities = comm_to_new_id.len();
+        let mut comm_to_new_id = vec![UNASSIGNED; max_comm + 1];
+        let mut num_communities = 0usize;
+        for (old_comm, present) in comm_present.into_iter().enumerate() {
+            if present {
+                comm_to_new_id[old_comm] = num_communities;
+                num_communities += 1;
+            }
+        }
         let mut new_node_metadata: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
         let mut new_node_sizes: Vec<f64> = vec![0.0; num_communities];
         let mut community_members: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
@@ -325,12 +332,11 @@ impl GraphState {
             if old_comm == UNASSIGNED {
                 continue;
             }
-            if let Some(&new_node) = comm_to_new_id.get(&old_comm) {
-                old_node_to_new_node[node] = new_node;
-                new_node_metadata[new_node].extend(self.node_metadata[node].iter().copied());
-                new_node_sizes[new_node] += self.node_sizes[node];
-                community_members[new_node].push(node);
-            }
+            let new_node = comm_to_new_id[old_comm];
+            old_node_to_new_node[node] = new_node;
+            new_node_metadata[new_node].extend(self.node_metadata[node].iter().copied());
+            new_node_sizes[new_node] += self.node_sizes[node];
+            community_members[new_node].push(node);
         }
 
         // Match libleidenalg collapse order: iterate communities, then nodes in each
@@ -354,9 +360,7 @@ impl GraphState {
                     if to_old_comm == UNASSIGNED {
                         continue;
                     }
-                    let Some(&u_comm) = comm_to_new_id.get(&to_old_comm) else {
-                        continue;
-                    };
+                    let u_comm = comm_to_new_id[to_old_comm];
 
                     // In igraph-based implementation, undirected self-loops are visited twice.
                     // Each visit contributes half weight to keep total loop contribution exact.
@@ -480,27 +484,37 @@ fn ensure_comm_capacity(
 }
 
 fn renumber_membership_by_size(membership: &mut [usize], node_sizes: Option<&[f64]>) {
-    let mut comm_weight: HashMap<usize, f64> = HashMap::new();
-    let mut comm_nodes: HashMap<usize, usize> = HashMap::new();
+    let max_comm = membership
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+    let mut comm_weight = vec![0.0; max_comm + 1];
+    let mut comm_nodes = vec![0usize; max_comm + 1];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
 
     for (node, &comm) in membership.iter().enumerate() {
         if comm == UNASSIGNED {
             continue;
         }
+        if comm_nodes[comm] == 0 {
+            touched_comms.push(comm);
+        }
         let node_weight = node_sizes
             .and_then(|sizes| sizes.get(node).copied())
             .unwrap_or(1.0);
-        *comm_weight.entry(comm).or_insert(0.0) += node_weight;
-        *comm_nodes.entry(comm).or_insert(0) += 1;
+        comm_weight[comm] += node_weight;
+        comm_nodes[comm] += 1;
     }
 
-    if comm_weight.is_empty() {
+    if touched_comms.is_empty() {
         return;
     }
 
-    let mut ranked: Vec<(usize, f64, usize)> = comm_weight
+    let mut ranked: Vec<(usize, f64, usize)> = touched_comms
         .into_iter()
-        .map(|(comm, weight)| (comm, weight, *comm_nodes.get(&comm).unwrap_or(&0)))
+        .map(|comm| (comm, comm_weight[comm], comm_nodes[comm]))
         .collect();
     ranked.sort_unstable_by(|(a_id, a_w, a_n), (b_id, b_w, b_n)| {
         b_w.total_cmp(a_w)
@@ -508,14 +522,14 @@ fn renumber_membership_by_size(membership: &mut [usize], node_sizes: Option<&[f6
             .then_with(|| a_id.cmp(b_id))
     });
 
-    let mut remap: HashMap<usize, usize> = HashMap::with_capacity(ranked.len());
+    let mut remap = vec![UNASSIGNED; max_comm + 1];
     for (new_id, (old_id, _, _)) in ranked.into_iter().enumerate() {
-        remap.insert(old_id, new_id);
+        remap[old_id] = new_id;
     }
 
     for comm in membership.iter_mut() {
         if *comm != UNASSIGNED {
-            *comm = *remap.get(comm).unwrap_or(comm);
+            *comm = remap[*comm];
         }
     }
 }
@@ -542,16 +556,28 @@ fn count_communities(membership: &[usize]) -> usize {
 }
 
 fn canonical_partition_signature(membership: &[usize]) -> Vec<Vec<usize>> {
-    let mut comm_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    let max_comm = membership
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+    let mut comm_map: Vec<Vec<usize>> = vec![Vec::new(); max_comm + 1];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
     for (node, &comm) in membership.iter().enumerate() {
         if comm != UNASSIGNED {
-            comm_map.entry(comm).or_default().push(node);
+            if comm_map[comm].is_empty() {
+                touched_comms.push(comm);
+            }
+            comm_map[comm].push(node);
         }
     }
 
-    let mut signature: Vec<Vec<usize>> = comm_map.into_values().collect();
-    for comm in &mut signature {
+    let mut signature: Vec<Vec<usize>> = Vec::with_capacity(touched_comms.len());
+    for comm_id in touched_comms {
+        let mut comm = std::mem::take(&mut comm_map[comm_id]);
         comm.sort_unstable();
+        signature.push(comm);
     }
     signature.sort_unstable();
     signature
@@ -1087,27 +1113,35 @@ pub fn leiden_communities(
 
     renumber_membership_by_size(&mut membership_original, None);
 
-    let mut comm_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    let max_comm = membership_original
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+    let mut comm_map: Vec<Vec<usize>> = vec![Vec::new(); max_comm + 1];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
     for (node, &comm) in membership_original.iter().enumerate() {
         if comm != UNASSIGNED {
-            comm_map.entry(comm).or_default().push(node);
+            if comm_map[comm].is_empty() {
+                touched_comms.push(comm);
+            }
+            comm_map[comm].push(node);
         }
     }
 
-    let mut comm_ids: Vec<usize> = comm_map.keys().copied().collect();
-    comm_ids.sort_unstable_by(|a, b| {
-        let size_a = comm_map.get(a).map_or(0, Vec::len);
-        let size_b = comm_map.get(b).map_or(0, Vec::len);
+    touched_comms.sort_unstable_by(|a, b| {
+        let size_a = comm_map[*a].len();
+        let size_b = comm_map[*b].len();
         size_b.cmp(&size_a).then_with(|| a.cmp(b))
     });
 
-    let mut result = Vec::with_capacity(comm_ids.len());
-    for comm_id in comm_ids {
-        if let Some(mut comm_nodes) = comm_map.remove(&comm_id) {
-            comm_nodes.sort_unstable();
-            if !comm_nodes.is_empty() {
-                result.push(comm_nodes);
-            }
+    let mut result = Vec::with_capacity(touched_comms.len());
+    for comm_id in touched_comms {
+        let mut comm_nodes = std::mem::take(&mut comm_map[comm_id]);
+        comm_nodes.sort_unstable();
+        if !comm_nodes.is_empty() {
+            result.push(comm_nodes);
         }
     }
 

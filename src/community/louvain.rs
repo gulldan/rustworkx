@@ -11,7 +11,7 @@
 // limitations under the License.
 // https://arxiv.org/abs/0803.0476
 
-use foldhash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use foldhash::{HashMap, HashMapExt};
 use petgraph::visit::EdgeRef;
 use petgraph::visit::IntoEdgeReferences;
 use pyo3::exceptions::PyValueError;
@@ -43,7 +43,7 @@ struct GraphState {
     /// Total weight of the graph (sum of all edge weights)
     total_weight: f64,
     /// Node metadata to track original nodes during graph aggregation
-    node_metadata: Vec<HashSet<usize>>,
+    node_metadata: Vec<Vec<usize>>,
 }
 
 impl GraphState {
@@ -64,11 +64,9 @@ impl GraphState {
         let mut total_weight = 0.0;
 
         // Initialize node metadata with singleton sets
-        let mut node_metadata: Vec<HashSet<usize>> = Vec::with_capacity(num_nodes);
+        let mut node_metadata: Vec<Vec<usize>> = Vec::with_capacity(num_nodes);
         for i in 0..num_nodes {
-            let mut set = HashSet::new();
-            set.insert(i);
-            node_metadata.push(set);
+            node_metadata.push(vec![i]);
         }
 
         // Convert PyGraph to adjacency list format
@@ -135,40 +133,38 @@ impl GraphState {
     /// # Returns
     /// * A new GraphState representing the aggregated graph
     fn aggregate(&self, node_to_comm: &[usize]) -> Self {
-        // Get number of communities for the new graph
-        let mut community_ids = HashSet::with_capacity(node_to_comm.len());
+        // Build dense old-community -> new-community remap in ascending old id
+        // (same deterministic ordering as sorting the unique community ids).
+        let mut comm_present = vec![false; self.num_nodes];
         for &comm in node_to_comm {
-            community_ids.insert(comm);
+            comm_present[comm] = true;
         }
-        let num_communities = community_ids.len();
-
-        // Create community -> new node id mapping
-        let mut comm_to_new_id = HashMap::with_capacity(num_communities);
-
-        // Sort community IDs for deterministic iteration
-        let mut sorted_community_ids: Vec<_> = community_ids.into_iter().collect();
-        sorted_community_ids.sort_unstable();
-        for (idx, comm) in sorted_community_ids.into_iter().enumerate() {
-            comm_to_new_id.insert(comm, idx);
+        let mut comm_to_new_id = vec![usize::MAX; self.num_nodes];
+        let mut num_communities = 0usize;
+        for (comm, present) in comm_present.into_iter().enumerate() {
+            if present {
+                comm_to_new_id[comm] = num_communities;
+                num_communities += 1;
+            }
         }
 
         // Initialize new graph
         let mut new_adj = vec![HashMap::new(); num_communities];
         let mut new_neighbor_order = vec![Vec::new(); num_communities];
-        let mut new_node_metadata = vec![HashSet::new(); num_communities];
+        let mut new_node_metadata = vec![Vec::new(); num_communities];
 
         // Aggregate node metadata into community super-nodes.
         for node in 0..self.num_nodes {
             let comm = node_to_comm[node];
-            let new_node = *comm_to_new_id.get(&comm).unwrap();
-            new_node_metadata[new_node].extend(self.node_metadata[node].iter());
+            let new_node = comm_to_new_id[comm];
+            new_node_metadata[new_node].extend(self.node_metadata[node].iter().copied());
         }
 
         // Aggregate each undirected edge exactly once (node <= neighbor), matching
         // NetworkX induced-graph semantics and preserving neighbor insertion order.
         for node in 0..self.num_nodes {
             let comm = node_to_comm[node];
-            let new_node = *comm_to_new_id.get(&comm).unwrap();
+            let new_node = comm_to_new_id[comm];
 
             for &neighbor in &self.neighbor_order[node] {
                 if node > neighbor {
@@ -179,7 +175,7 @@ impl GraphState {
                     continue;
                 };
                 let neighbor_comm = node_to_comm[neighbor];
-                let new_neighbor = *comm_to_new_id.get(&neighbor_comm).unwrap();
+                let new_neighbor = comm_to_new_id[neighbor_comm];
 
                 if new_node == new_neighbor {
                     if !new_adj[new_node].contains_key(&new_node) {
@@ -810,13 +806,14 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
         return 0.0;
     }
 
-    let mut l_c: HashMap<usize, f64> = HashMap::new(); // internal edge weights of communities
-    let mut k_c: HashMap<usize, f64> = HashMap::new(); // sum of degrees of communities
+    let max_comm = node_to_comm.iter().copied().max().unwrap_or(0);
+    let mut l_c = vec![0.0; max_comm + 1]; // internal edge weights of communities
+    let mut k_c = vec![0.0; max_comm + 1]; // sum of degrees of communities
 
     // First, calculate the sum of degrees for each community
     for node in 0..gs.num_nodes {
         let comm = node_to_comm[node];
-        *k_c.entry(comm).or_insert(0.0) += gs.node_degrees[node];
+        k_c[comm] += gs.node_degrees[node];
     }
 
     // Now, calculate the internal edge weights for each community
@@ -829,23 +826,23 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
             // If an edge is within a community, add its weight to the internal weight.
             // Count each edge only once (u <= v).
             if u_comm == v_comm && u <= v {
-                *l_c.entry(u_comm).or_insert(0.0) += weight;
+                l_c[u_comm] += weight;
             }
         }
     }
 
     // Final calculation: Q = Σ_c [ L_c / m - γ (k_c / (2m))^2 ]
     let mut q = 0.0;
-    let mut processed_communities = std::collections::HashSet::new();
+    let mut processed_communities = vec![false; max_comm + 1];
 
     for &comm_id in node_to_comm.iter() {
-        if processed_communities.contains(&comm_id) {
+        if processed_communities[comm_id] {
             continue; // Community already processed
         }
-        processed_communities.insert(comm_id);
+        processed_communities[comm_id] = true;
 
-        let lc = *l_c.get(&comm_id).unwrap_or(&0.0);
-        let kc = *k_c.get(&comm_id).unwrap_or(&0.0);
+        let lc = l_c[comm_id];
+        let kc = k_c[comm_id];
 
         q += (lc / m) - gamma * (kc / (2.0 * m)).powi(2);
     }

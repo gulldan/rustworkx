@@ -324,14 +324,38 @@ pub(crate) fn extract_graph(py: Python, graph: &Py<PyAny>) -> PyResult<GraphRef>
 #[inline]
 pub(crate) fn group_by_labels(labels: &[usize]) -> Vec<Vec<usize>> {
     let n = labels.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    let max_label = labels.iter().copied().max().unwrap_or(0);
+    // Fast path for dense/non-huge labels (which is the common case in LPA).
+    if max_label <= n.saturating_mul(8) {
+        let mut comms: Vec<Vec<usize>> = vec![Vec::new(); max_label + 1];
+        let mut touched_labels: Vec<usize> = Vec::with_capacity(64);
+        for (node, &label) in labels.iter().enumerate() {
+            if comms[label].is_empty() {
+                touched_labels.push(label);
+            }
+            comms[label].push(node);
+        }
+
+        let mut result: Vec<Vec<usize>> = touched_labels
+            .into_iter()
+            .map(|label| std::mem::take(&mut comms[label]))
+            .collect();
+        // First element is always the minimum node index because nodes are visited in ascending order.
+        result.sort_by_key(|comm| comm.first().copied().unwrap_or(usize::MAX));
+        return result;
+    }
+
+    // Sparse/fallback path.
     let mut comms: HashMap<usize, Vec<usize>> = HashMap::with_capacity(n);
     for (node, &label) in labels.iter().enumerate() {
         comms.entry(label).or_default().push(node);
     }
-    // Sort communities by their minimum node index for deterministic output order.
-    // This ensures the same partition always produces the same cluster IDs.
     let mut result: Vec<Vec<usize>> = comms.into_values().collect();
-    result.sort_by_key(|comm| comm.iter().copied().min().unwrap_or(usize::MAX));
+    result.sort_by_key(|comm| comm.first().copied().unwrap_or(usize::MAX));
     result
 }
 
