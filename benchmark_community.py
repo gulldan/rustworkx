@@ -116,6 +116,91 @@ def _get_runner_function_by_name(name: str) -> Callable[..., Any]:
 # --- End Centralized Algorithm Configuration ---
 
 
+def _generate_exact_match_markdown_summary(benchmark_results: list[dict[str, Any]]) -> str:
+    """Build a compact exact-match summary section for the Markdown report."""
+    exact_metric_props = [
+        metric_prop
+        for metric_prop in ORDERED_METRIC_PROPERTIES
+        if isinstance(metric_prop.get("key"), str) and metric_prop["key"].startswith("_exact_match_")
+    ]
+    if not exact_metric_props:
+        return ""
+
+    valid_results = [
+        res
+        for res in benchmark_results
+        if isinstance(res, dict) and res.get("status") != "skipped_placeholder"
+    ]
+    if not valid_results:
+        return ""
+
+    lines: list[str] = [
+        "## Exact-Match Summary",
+        "",
+        "| Pair | Yes | No | N/A | SKIPPED |",
+        "|-|-:|-:|-:|-:|",
+    ]
+    mismatch_lines: list[str] = []
+
+    for metric_prop in exact_metric_props:
+        metric_key = metric_prop["key"]
+        metric_name = metric_prop.get("name", metric_key)
+
+        yes_count = 0
+        no_count = 0
+        na_count = 0
+        skipped_count = 0
+        mismatches_for_metric: list[str] = []
+
+        for dataset_result in valid_results:
+            dataset_name = dataset_result.get("dataset", "unknown")
+            for algo_cfg in ALGORITHMS_CONFIG_STRUCTURE:
+                algo_prefix = algo_cfg["prefix"]
+                algo_display_name = algo_cfg["name"]
+
+                # Mirror row-inclusion logic from Markdown table generation:
+                # if no metrics were recorded for this algorithm on this dataset,
+                # do not include it in summary counts.
+                if not any(k.startswith(algo_prefix) for k in dataset_result.keys()):
+                    continue
+
+                elapsed_val = dataset_result.get(f"{algo_prefix}_elapsed", -2)
+                raw_val = dataset_result.get(f"{algo_prefix}{metric_key}")
+
+                if elapsed_val == -1:
+                    skipped_count += 1
+                    continue
+
+                if isinstance(raw_val, bool):
+                    if raw_val:
+                        yes_count += 1
+                    else:
+                        no_count += 1
+                        mismatches_for_metric.append(f"`{dataset_name}` / `{algo_display_name}`")
+                    continue
+
+                if raw_val is None or (isinstance(raw_val, float) and np.isnan(raw_val)):
+                    na_count += 1
+                else:
+                    na_count += 1
+
+        lines.append(
+            f"| {metric_name} | {yes_count} | {no_count} | {na_count} | {skipped_count} |"
+        )
+
+        if mismatches_for_metric:
+            mismatch_lines.append(f"### {metric_name}")
+            mismatch_lines.extend(f"- {item}" for item in mismatches_for_metric)
+            mismatch_lines.append("")
+
+    if mismatch_lines:
+        lines.append("")
+        lines.append("## Exact-Match Mismatches")
+        lines.extend(mismatch_lines)
+
+    return "\n".join(lines).strip()
+
+
 def run_benchmark() -> None:
     """Runs the full community detection benchmark.
 
@@ -216,6 +301,9 @@ def run_benchmark() -> None:
     logger.info("GENERATING RESULTS TABLE (MARKDOWN)")
     logger.info("=" * 80)
     table_string: str = generate_results_table(benchmark_results)
+    exact_summary: str = _generate_exact_match_markdown_summary(benchmark_results)
+    if exact_summary:
+        table_string = f"{exact_summary}\n\n{table_string}"
     logger.info(f"Markdown Table:\n{table_string}")  # Log the table string itself
     table_filename: str = os.path.join(result_folder, "benchmark_results_table.md")
     try:
@@ -363,12 +451,16 @@ def run_cdlib_algorithm(
 
 
 @measure_memory
-def run_rx_leiden_algorithm(graph: rx.PyGraph, resolution: float = 1.0) -> list[list[int]]:
+def run_rx_leiden_algorithm(
+    graph: rx.PyGraph, resolution: float = 1.0, adjacency: list[list[int]] | None = None
+) -> list[list[int]]:
     """Runs the RustWorkX Leiden community detection algorithm.
 
     Args:
         graph (rx.PyGraph): The input RustWorkX graph.
         resolution (float, optional): Resolution parameter for Leiden. Defaults to 1.0.
+        adjacency (Optional[list[list[int]]]): Pre-built adjacency list to align
+            node-neighbor iteration order with NetworkX benchmark graph.
 
     Returns:
         List[List[int]]: A list of lists, where each inner list contains the
@@ -385,7 +477,7 @@ def run_rx_leiden_algorithm(graph: rx.PyGraph, resolution: float = 1.0) -> list[
 
     try:
         communities: list[list[int]] = rx.community.leiden_communities(  # type: ignore
-            graph, resolution=resolution, seed=42
+            graph, weight_fn=weight_fn, resolution=resolution, seed=42
         )
         return communities
     except Exception as e:
@@ -459,6 +551,49 @@ def run_nx_lpa_algorithm(graph: nx.Graph, seed: int | None) -> list[set]:
         return [set(c) for c in communities_generator if c]
     except Exception as e:
         logger.error(f"  Error in NetworkX LPA: {e}", exc_info=True)
+        return []
+
+
+@measure_memory
+def run_nx_cliques_algorithm(graph: nx.Graph) -> list[list[Any]]:
+    """Runs NetworkX maximal-clique enumeration."""
+    try:
+        return [list(c) for c in nx.find_cliques(graph) if c]
+    except Exception as e:
+        logger.error(f"  Error in NetworkX maximal cliques: {e}", exc_info=True)
+        return []
+
+
+@measure_memory
+def run_rx_cliques_algorithm(graph: rx.PyGraph) -> list[list[int]]:
+    """Runs rustworkx maximal-clique enumeration."""
+    try:
+        communities: list[list[int]] = rx.community.find_maximal_cliques(graph)  # type: ignore
+        return communities
+    except Exception as e:
+        logger.error(f"  Error in RustWorkX maximal cliques: {e}", exc_info=True)
+        return []
+
+
+@measure_memory
+def run_nx_cpm_algorithm(graph: nx.Graph, k: int = 3) -> list[list[Any]]:
+    """Runs NetworkX clique-percolation communities (CPM)."""
+    try:
+        communities = nx.community.k_clique_communities(graph, k)
+        return [list(c) for c in communities if c]
+    except Exception as e:
+        logger.error(f"  Error in NetworkX CPM (k={k}): {e}", exc_info=True)
+        return []
+
+
+@measure_memory
+def run_rx_cpm_algorithm(graph: rx.PyGraph, k: int = 3) -> list[list[int]]:
+    """Runs rustworkx clique-percolation communities (CPM)."""
+    try:
+        communities: list[list[int]] = rx.community.cpm_communities(graph, k)  # type: ignore
+        return communities
+    except Exception as e:
+        logger.error(f"  Error in RustWorkX CPM (k={k}): {e}", exc_info=True)
         return []
 
 
@@ -839,7 +974,7 @@ def _run_single_algorithm_config(
     dataset_gt: dict[Any, int] | list[int] | None,
     has_ground_truth: bool,
     rx_specific_weight_fn_for_modularity: Callable[[Any], float] | None = None,
-) -> None:
+) -> list[set[Any]]:
     """Runs a single algorithm configuration, processes its communities, and calculates all metrics.
 
     This function encapsulates the logic for executing one variation of a community
@@ -934,6 +1069,146 @@ def _run_single_algorithm_config(
         has_ground_truth=has_ground_truth,
         rx_weight_fn_for_modularity=actual_rx_weight_fn_modularity,
     )
+    return processed_communities
+
+
+def _partition_signature(partition: list[set[Any]]) -> set[frozenset[Any]]:
+    """Convert partition to an order-independent signature."""
+    return {frozenset(comm) for comm in partition if comm}
+
+
+def _exact_partition_match(partition_a: list[set[Any]], partition_b: list[set[Any]]) -> bool:
+    """Check exact set-wise equality of two partitions."""
+    return _partition_signature(partition_a) == _partition_signature(partition_b)
+
+
+def _get_partition_if_ran(
+    results_dict: dict[str, Any],
+    partitions_by_algo: dict[str, list[set[Any]]],
+    algo_prefix: str,
+) -> list[set[Any]] | None:
+    elapsed_key = f"{algo_prefix}_elapsed"
+    elapsed_val = results_dict.get(elapsed_key, -2)
+    if elapsed_val in (-2, -1):
+        return None
+    return partitions_by_algo.get(algo_prefix)
+
+
+def _set_exact_match_metric(
+    results_dict: dict[str, Any],
+    algo_prefix: str,
+    metric_suffix: str,
+    value: bool | None,
+) -> None:
+    if value is None:
+        results_dict[f"{algo_prefix}{metric_suffix}"] = float("nan")
+    else:
+        results_dict[f"{algo_prefix}{metric_suffix}"] = bool(value)
+
+
+def _calculate_and_store_exact_match_metrics(
+    results_dict: dict[str, Any],
+    partitions_by_algo: dict[str, list[set[Any]]],
+) -> None:
+    """Store exact partition-match diagnostics for key cross-library pairs."""
+    # Louvain: compare against NetworkX Louvain at each configured resolution.
+    for res_val in RESOLUTIONS_TO_TEST:
+        res_key = str(res_val).replace(".", "p")
+        nx_prefix = f"nx_louvain_res{res_key}"
+        rx_prefix = f"rx_louvain_res{res_key}"
+        metric = "_exact_match_nx_louvain"
+
+        nx_part = _get_partition_if_ran(results_dict, partitions_by_algo, nx_prefix)
+        if nx_part is not None:
+            _set_exact_match_metric(results_dict, nx_prefix, metric, True)
+            rx_part = _get_partition_if_ran(results_dict, partitions_by_algo, rx_prefix)
+            if rx_part is not None:
+                _set_exact_match_metric(
+                    results_dict, rx_prefix, metric, _exact_partition_match(rx_part, nx_part)
+                )
+
+    # LPA: compare canonical RX LPA (weighted) against NetworkX LPA.
+    # Strongest-edge and unweighted variants are intentionally different methods.
+    lpa_metric = "_exact_match_nx_lpa"
+    nx_lpa_prefix = "nx_lpa"
+    nx_lpa_part = _get_partition_if_ran(results_dict, partitions_by_algo, nx_lpa_prefix)
+    if nx_lpa_part is not None:
+        _set_exact_match_metric(results_dict, nx_lpa_prefix, lpa_metric, True)
+        for algo_prefix in ["rx_lpa_weighted"]:
+            algo_part = _get_partition_if_ran(results_dict, partitions_by_algo, algo_prefix)
+            if algo_part is not None:
+                _set_exact_match_metric(
+                    results_dict,
+                    algo_prefix,
+                    lpa_metric,
+                    _exact_partition_match(algo_part, nx_lpa_part),
+                )
+
+    # Maximal cliques: compare RX against NetworkX.
+    cliques_metric = "_exact_match_nx_cliques"
+    nx_cliques_prefix = "nx_cliques"
+    nx_cliques_part = _get_partition_if_ran(results_dict, partitions_by_algo, nx_cliques_prefix)
+    if nx_cliques_part is not None:
+        _set_exact_match_metric(results_dict, nx_cliques_prefix, cliques_metric, True)
+        rx_cliques_part = _get_partition_if_ran(results_dict, partitions_by_algo, "rx_cliques")
+        if rx_cliques_part is not None:
+            _set_exact_match_metric(
+                results_dict,
+                "rx_cliques",
+                cliques_metric,
+                _exact_partition_match(rx_cliques_part, nx_cliques_part),
+            )
+
+    # CPM (k=3): compare RX against NetworkX.
+    cpm_metric = "_exact_match_nx_cpm"
+    nx_cpm_prefix = "nx_cpm_k3"
+    nx_cpm_part = _get_partition_if_ran(results_dict, partitions_by_algo, nx_cpm_prefix)
+    if nx_cpm_part is not None:
+        _set_exact_match_metric(results_dict, nx_cpm_prefix, cpm_metric, True)
+        rx_cpm_part = _get_partition_if_ran(results_dict, partitions_by_algo, "rx_cpm_k3")
+        if rx_cpm_part is not None:
+            _set_exact_match_metric(
+                results_dict,
+                "rx_cpm_k3",
+                cpm_metric,
+                _exact_partition_match(rx_cpm_part, nx_cpm_part),
+            )
+
+    # Leiden: compare against cdlib Leiden and against original leidenalg.
+    rx_leiden_prefixes = [f"rx_leiden_res{str(res).replace('.', 'p')}" for res in RESOLUTIONS_TO_TEST]
+    leiden_candidates = ["cdlib_leiden", "leidenalg"] + rx_leiden_prefixes
+
+    cdlib_metric = "_exact_match_cdlib_leiden"
+    cdlib_part = _get_partition_if_ran(results_dict, partitions_by_algo, "cdlib_leiden")
+    if cdlib_part is not None:
+        _set_exact_match_metric(results_dict, "cdlib_leiden", cdlib_metric, True)
+        for algo_prefix in leiden_candidates:
+            if algo_prefix == "cdlib_leiden":
+                continue
+            algo_part = _get_partition_if_ran(results_dict, partitions_by_algo, algo_prefix)
+            if algo_part is not None:
+                _set_exact_match_metric(
+                    results_dict,
+                    algo_prefix,
+                    cdlib_metric,
+                    _exact_partition_match(algo_part, cdlib_part),
+                )
+
+    leidenalg_metric = "_exact_match_leidenalg"
+    leidenalg_part = _get_partition_if_ran(results_dict, partitions_by_algo, "leidenalg")
+    if leidenalg_part is not None:
+        _set_exact_match_metric(results_dict, "leidenalg", leidenalg_metric, True)
+        for algo_prefix in leiden_candidates:
+            if algo_prefix == "leidenalg":
+                continue
+            algo_part = _get_partition_if_ran(results_dict, partitions_by_algo, algo_prefix)
+            if algo_part is not None:
+                _set_exact_match_metric(
+                    results_dict,
+                    algo_prefix,
+                    leidenalg_metric,
+                    _exact_partition_match(algo_part, leidenalg_part),
+                )
 
 
 def initialize_results_dict(
@@ -1002,6 +1277,12 @@ def initialize_results_dict(
         "_num_singleton_comms": 0,
         "_purity_nodes": 0,
         "_unclustered_pct": float("nan"),
+        "_exact_match_nx_louvain": float("nan"),
+        "_exact_match_nx_lpa": float("nan"),
+        "_exact_match_nx_cliques": float("nan"),
+        "_exact_match_nx_cpm": float("nan"),
+        "_exact_match_cdlib_leiden": float("nan"),
+        "_exact_match_leidenalg": float("nan"),
     }
     for jt_key_part in [f"_gcr_jt{str(jt).replace('.', 'p')}" for jt in JACCARD_THRESHOLDS_TO_TEST] + [
         f"_pcp_jt{str(jt).replace('.', 'p')}" for jt in JACCARD_THRESHOLDS_TO_TEST
@@ -1200,6 +1481,8 @@ def run_benchmark_on_dataset(
         if "weight" not in data or data["weight"] is None:
             data["weight"] = default_weight
 
+    partitions_by_algo: dict[str, list[set[Any]]] = {}
+
     for algo_config in ALGORITHMS_CONFIG_STRUCTURE:
         current_algo_prefix: str = algo_config["prefix"]
         runner_name: str = algo_config["runner_name"]
@@ -1215,6 +1498,36 @@ def run_benchmark_on_dataset(
         logger.info(
             f"\n--- Processing {results_for_current_dataset['dataset']} with {algo_display_name} ---"
         )
+
+        max_nodes_for_algo: int | None = algo_config.get("max_nodes")
+        max_edges_for_algo: int | None = algo_config.get("max_edges")
+        if (max_nodes_for_algo is not None and num_nodes > max_nodes_for_algo) or (
+            max_edges_for_algo is not None and num_edges > max_edges_for_algo
+        ):
+            limit_desc: list[str] = []
+            if max_nodes_for_algo is not None:
+                limit_desc.append(f"nodes={num_nodes} > {max_nodes_for_algo}")
+            if max_edges_for_algo is not None:
+                limit_desc.append(f"edges={num_edges} > {max_edges_for_algo}")
+            logger.warning(
+                f"  Skipping {algo_display_name} due to configured complexity limits ({', '.join(limit_desc)})."
+            )
+            results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = -1
+            _calculate_and_store_metrics_for_run(
+                current_algo_prefix=current_algo_prefix,
+                processed_communities=[],
+                communities_raw=[],
+                results_dict=results_for_current_dataset,
+                nx_graph_original_ids=nx_graph_original_ids,
+                rx_graph=rx_graph,
+                node_map=node_map,
+                is_rx_algo=is_rx,
+                dataset_gt=dataset_gt,
+                has_ground_truth=has_ground_truth,  # type: ignore
+                rx_weight_fn_for_modularity=None,
+            )
+            partitions_by_algo[current_algo_prefix] = []
+            continue
 
         # Skip NetworkX algorithms for very large datasets (> 1M edges) as they are too slow
         if not is_rx and num_edges > LARGE_EDGES_THRESHOLD:
@@ -1235,6 +1548,7 @@ def run_benchmark_on_dataset(
                 has_ground_truth=has_ground_truth,  # type: ignore
                 rx_weight_fn_for_modularity=None,
             )
+            partitions_by_algo[current_algo_prefix] = []
             continue
 
         # Skip NetworkX LPA for large node count graphs (original check)
@@ -1256,6 +1570,7 @@ def run_benchmark_on_dataset(
                 has_ground_truth=has_ground_truth,  # type: ignore
                 rx_weight_fn_for_modularity=None,
             )
+            partitions_by_algo[current_algo_prefix] = []
             continue
 
         try:
@@ -1263,7 +1578,7 @@ def run_benchmark_on_dataset(
                 _get_runner_function_by_name(runner_name)
             )  # type: ignore
 
-            _run_single_algorithm_config(
+            processed_communities_for_algo = _run_single_algorithm_config(
                 algo_runner_func=algo_runner_func,
                 run_args=run_args,
                 graph_to_run_on=rx_graph if is_rx else graph_for_nx_cdlib_eff,
@@ -1278,6 +1593,7 @@ def run_benchmark_on_dataset(
                 dataset_gt=dataset_gt,
                 has_ground_truth=has_ground_truth,  # type: ignore
             )
+            partitions_by_algo[current_algo_prefix] = processed_communities_for_algo
         except Exception as e:
             logger.exception(f"  Error running {algo_display_name} ({current_algo_prefix}): {str(e)}")
             results_for_current_dataset[f"{current_algo_prefix}_elapsed"] = (
@@ -1299,6 +1615,9 @@ def run_benchmark_on_dataset(
                 has_ground_truth=has_ground_truth,  # type: ignore
                 rx_weight_fn_for_modularity=None,
             )
+            partitions_by_algo[current_algo_prefix] = []
+
+    _calculate_and_store_exact_match_metrics(results_for_current_dataset, partitions_by_algo)
 
     if len(RESOLUTIONS_TO_TEST) > 1:
         default_res_for_diag: float = RESOLUTIONS_TO_TEST[1]

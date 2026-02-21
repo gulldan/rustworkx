@@ -337,6 +337,32 @@ def format_time(seconds: float) -> str:
         return f"{value:.3g} s"
 
 
+def format_bool(value: Any) -> str:
+    """Formats bool-like exact-match values for tables.
+
+    Args:
+        value: A bool/number/string/None value.
+
+    Returns:
+        "Yes", "No", or "N/A".
+    """
+    if value is None:
+        return "N/A"
+    if isinstance(value, float) and np.isnan(value):
+        return "N/A"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, int | float):
+        return "Yes" if float(value) != 0.0 else "No"
+    if isinstance(value, str):
+        value_norm = value.strip().lower()
+        if value_norm in {"true", "yes", "y", "1"}:
+            return "Yes"
+        if value_norm in {"false", "no", "n", "0"}:
+            return "No"
+    return "N/A"
+
+
 def rx_modularity_calculation(
     rx_graph: rx.PyGraph | rx.PyDiGraph,
     communities: list[list[int]],

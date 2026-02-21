@@ -19,8 +19,8 @@ use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::prelude::*;
 
 use crate::community::common::{
-    GraphRef, build_rng, choose_random, extract_graph, get_named_weight, group_by_labels,
-    shuffle_nodes,
+    GraphRef, PythonCompatRng, build_rng, choose_random, extract_graph, get_named_weight,
+    group_by_labels, shuffle_nodes,
 };
 
 /// Asynchronous Label Propagation Algorithm for community detection.
@@ -45,6 +45,9 @@ use crate::community::common::{
 /// Note:
 ///     This implementation uses Rust's Pcg64 RNG for performance. Results may
 ///     differ from NetworkX's implementation due to different RNG sequences.
+///     When both `seed` and `adjacency` are provided, it switches to a
+///     Python-compatible RNG implemented in Rust for NetworkX-compatible
+///     shuffle/choice behavior.
 #[pyfunction]
 #[pyo3(
     signature = (graph, /, weight=None, seed=None, max_iterations=None, adjacency=None),
@@ -67,6 +70,13 @@ pub fn asyn_lpa_communities(
 
     // --- RNG: Use pure Rust Pcg64 (fast, deterministic, no Python dependency) ---
     let mut rng = build_rng(seed);
+    // Exact NetworkX compatibility mode:
+    // when both seed and adjacency are provided, use Python-compatible
+    // Random(seed) semantics for node shuffling and tie-break choice.
+    let mut py_compat_rng: Option<PythonCompatRng> = match (seed, adjacency.as_ref()) {
+        (Some(s), Some(_)) => Some(PythonCompatRng::new(s)),
+        _ => None,
+    };
 
     // === Pre-compute adjacency (for speed and fewer Python calls in loop) ===
     // Unweighted: unique neighbors per node (Vec<Vec<usize>>).
@@ -259,13 +269,19 @@ pub fn asyn_lpa_communities(
         iter += 1;
         cont = false;
 
-        // Reset nodes to [0, 1, 2, ..., n-1] before shuffling
-        for i in 0..n {
-            nodes[i] = i;
+        // Shuffle nodes in random order.
+        if let Some(py_rng) = py_compat_rng.as_mut() {
+            for i in 0..n {
+                nodes[i] = i;
+            }
+            py_rng.shuffle(&mut nodes);
+        } else {
+            // Reset nodes to [0, 1, 2, ..., n-1] before shuffling
+            for i in 0..n {
+                nodes[i] = i;
+            }
+            shuffle_nodes(&mut rng, &mut nodes);
         }
-
-        // Shuffle nodes in random order (in-place)
-        shuffle_nodes(&mut rng, &mut nodes);
 
         for &node in &nodes {
             // Quick check: does this node have neighbors?
@@ -331,7 +347,11 @@ pub fn asyn_lpa_communities(
             // Update: if current label is in best_labels, node keeps its label.
             // Otherwise, randomly choose one of the best labels.
             if !best_labels.is_empty() && !current_is_best {
-                let chosen = choose_random(&mut rng, &best_labels);
+                let chosen = if let Some(py_rng) = py_compat_rng.as_mut() {
+                    *py_rng.choose(&best_labels)
+                } else {
+                    choose_random(&mut rng, &best_labels)
+                };
                 labels[node] = chosen;
                 cont = true;
             }

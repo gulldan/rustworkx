@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
 
+use crate::community::common::PythonCompatRng;
 use crate::graph::PyGraph;
 use crate::weight_callable;
 
@@ -35,6 +36,10 @@ struct GraphState {
     num_nodes: usize,
     /// Adjacency list: node -> neighbors with weights
     adj: Vec<HashMap<usize, f64>>,
+    /// Neighbor iteration order for each node (used for deterministic tie-breaking)
+    neighbor_order: Vec<Vec<usize>>,
+    /// Precomputed weighted degree for each node
+    node_degrees: Vec<f64>,
     /// Total weight of the graph (sum of all edge weights)
     total_weight: f64,
     /// Node metadata to track original nodes during graph aggregation
@@ -55,6 +60,7 @@ impl GraphState {
     fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: &Option<Py<PyAny>>) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
         let mut adj = vec![HashMap::new(); num_nodes];
+        let mut neighbor_order = vec![Vec::new(); num_nodes];
         let mut total_weight = 0.0;
 
         // Initialize node metadata with singleton sets
@@ -80,18 +86,42 @@ impl GraphState {
             }
             if u == v {
                 // Self-loops are not counted in the total weight
+                if !adj[u].contains_key(&u) {
+                    neighbor_order[u].push(u);
+                }
                 *adj[u].entry(u).or_insert(0.0) += weight;
                 total_weight += 2.0 * weight;
             } else {
+                if !adj[u].contains_key(&v) {
+                    neighbor_order[u].push(v);
+                }
                 *adj[u].entry(v).or_insert(0.0) += weight;
+                if !adj[v].contains_key(&u) {
+                    neighbor_order[v].push(u);
+                }
                 *adj[v].entry(u).or_insert(0.0) += weight; // Undirected graph
                 total_weight += 2.0 * weight; // 2m = sum of all degrees
             }
         }
 
+        let node_degrees: Vec<f64> = adj
+            .iter()
+            .enumerate()
+            .map(|(node, neighbors)| {
+                let mut degree = neighbors.values().sum::<f64>();
+                // In undirected graphs, self-loop contributes twice to degree.
+                if let Some(self_loop_weight) = neighbors.get(&node) {
+                    degree += *self_loop_weight;
+                }
+                degree
+            })
+            .collect();
+
         Ok(GraphState {
             num_nodes,
             adj,
+            neighbor_order,
+            node_degrees,
             total_weight,
             node_metadata,
         })
@@ -124,31 +154,70 @@ impl GraphState {
 
         // Initialize new graph
         let mut new_adj = vec![HashMap::new(); num_communities];
+        let mut new_neighbor_order = vec![Vec::new(); num_communities];
         let mut new_node_metadata = vec![HashSet::new(); num_communities];
 
-        // Aggregate nodes into communities
+        // Aggregate node metadata into community super-nodes.
+        for node in 0..self.num_nodes {
+            let comm = node_to_comm[node];
+            let new_node = *comm_to_new_id.get(&comm).unwrap();
+            new_node_metadata[new_node].extend(self.node_metadata[node].iter());
+        }
+
+        // Aggregate each undirected edge exactly once (node <= neighbor), matching
+        // NetworkX induced-graph semantics and preserving neighbor insertion order.
         for node in 0..self.num_nodes {
             let comm = node_to_comm[node];
             let new_node = *comm_to_new_id.get(&comm).unwrap();
 
-            // Add original node identifiers to the new metadata
-            new_node_metadata[new_node].extend(self.node_metadata[node].iter());
+            for &neighbor in &self.neighbor_order[node] {
+                if node > neighbor {
+                    continue;
+                }
 
-            // Aggregate edges - iterate in sorted order for determinism
-            let mut sorted_neighbors: Vec<_> = self.adj[node].iter().collect();
-            sorted_neighbors.sort_by_key(|&(&neighbor, _)| neighbor);
-            for (&neighbor, &weight) in sorted_neighbors {
+                let Some(&weight) = self.adj[node].get(&neighbor) else {
+                    continue;
+                };
                 let neighbor_comm = node_to_comm[neighbor];
                 let new_neighbor = *comm_to_new_id.get(&neighbor_comm).unwrap();
 
-                *new_adj[new_node].entry(new_neighbor).or_insert(0.0) += weight;
+                if new_node == new_neighbor {
+                    if !new_adj[new_node].contains_key(&new_node) {
+                        new_neighbor_order[new_node].push(new_node);
+                    }
+                    *new_adj[new_node].entry(new_node).or_insert(0.0) += weight;
+                } else {
+                    if !new_adj[new_node].contains_key(&new_neighbor) {
+                        new_neighbor_order[new_node].push(new_neighbor);
+                    }
+                    *new_adj[new_node].entry(new_neighbor).or_insert(0.0) += weight;
+
+                    if !new_adj[new_neighbor].contains_key(&new_node) {
+                        new_neighbor_order[new_neighbor].push(new_node);
+                    }
+                    *new_adj[new_neighbor].entry(new_node).or_insert(0.0) += weight;
+                }
             }
         }
 
-        // The total weight remains the same after aggregation
+        // The total weight remains the same after aggregation.
+        let node_degrees: Vec<f64> = new_adj
+            .iter()
+            .enumerate()
+            .map(|(node, neighbors)| {
+                let mut degree = neighbors.values().sum::<f64>();
+                if let Some(self_loop_weight) = neighbors.get(&node) {
+                    degree += *self_loop_weight;
+                }
+                degree
+            })
+            .collect();
+
         GraphState {
             num_nodes: num_communities,
             adj: new_adj,
+            neighbor_order: new_neighbor_order,
+            node_degrees,
             total_weight: self.total_weight,
             node_metadata: new_node_metadata,
         }
@@ -159,64 +228,13 @@ impl GraphState {
 // Louvain Algorithm Implementation
 // ========================
 
-/// Calculate community weights for a node with insertion order tracking
-///
-/// # Arguments
-/// * `node` - The node to calculate weights for
-/// * `node_to_comm` - Mapping of nodes to communities
-/// * `adj` - Adjacency list representation of the graph
-/// * `nx_adjacency` - Optional adjacency list from NetworkX (for matching NX behavior)
-///
-/// # Returns
-/// * A tuple of (map from community IDs to weights, vector of community IDs in insertion order)
-fn get_neighbor_weights_ordered(
-    node: usize,
-    node_to_comm: &[usize],
-    adj: &[HashMap<usize, f64>],
-    nx_adjacency: Option<&Vec<Vec<usize>>>,
-) -> (HashMap<usize, f64>, Vec<usize>) {
-    let mut weights = HashMap::new();
-    let mut order = Vec::new();
-
-    // Use NX adjacency order if provided, otherwise use Rust HashMap order
-    if let Some(nx_adj) = nx_adjacency {
-        // Iterate in NX's adjacency order
-        for &neighbor in &nx_adj[node] {
-            if node != neighbor {
-                if let Some(&weight) = adj[node].get(&neighbor) {
-                    let comm = node_to_comm[neighbor];
-                    if !weights.contains_key(&comm) {
-                        order.push(comm);
-                    }
-                    *weights.entry(comm).or_insert(0.0) += weight;
-                }
-            }
-        }
-    } else {
-        // Sort neighbors for deterministic iteration order (after first level or when no adjacency)
-        let mut sorted_neighbors: Vec<_> = adj[node].iter().collect();
-        sorted_neighbors.sort_by_key(|&(&neighbor, _)| neighbor);
-        for (&neighbor, &weight) in sorted_neighbors {
-            if node != neighbor {
-                let comm = node_to_comm[neighbor];
-                if !weights.contains_key(&comm) {
-                    order.push(comm);
-                }
-                *weights.entry(comm).or_insert(0.0) += weight;
-            }
-        }
-    }
-
-    (weights, order)
-}
-
 /// Performs one level of Louvain algorithm optimization
 ///
 /// # Arguments
 /// * `graph` - The current graph state
 /// * `node_to_comm` - Current assignment of nodes to communities (modified in-place)
 /// * `resolution` - Resolution parameter for modularity calculation
-/// * `rng` - Random number generator for node shuffling
+/// * `node_order` - Precomputed node visitation order for this level
 /// * `nx_adjacency` - Optional adjacency list from NetworkX (for matching NX behavior)
 ///
 /// # Returns
@@ -225,41 +243,73 @@ fn run_one_level(
     graph: &GraphState,
     node_to_comm: &mut [usize],
     resolution: f64,
-    rng: &mut LouvainRng,
+    node_order: &[usize],
     nx_adjacency: Option<&Vec<Vec<usize>>>,
 ) -> bool {
-    let m_2std = graph.total_weight; // This is 2*m_std (sum of all degrees)
+    let m = graph.total_weight / 2.0; // Same definition as NetworkX graph.size(weight="weight")
     let mut moved = false;
+    let n = graph.num_nodes;
 
-    // Track the total degree of each community
-    let mut community_degrees = HashMap::with_capacity(graph.num_nodes);
-
-    // Use enumeration for node_to_comm
-    for (node, &comm) in node_to_comm.iter().enumerate().take(graph.num_nodes) {
-        let degree = graph.adj[node].values().sum::<f64>();
-        *community_degrees.entry(comm).or_insert(0.0) += degree;
+    // Track the total degree of each community using a dense array.
+    let mut community_degrees = vec![0.0; n];
+    for (node, &comm) in node_to_comm.iter().enumerate().take(n) {
+        community_degrees[comm] += graph.node_degrees[node];
     }
 
-    let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
-    // Shuffle nodes using pure Rust RNG
-    nodes.shuffle(rng);
+    // Reusable per-node buffers for neighbor community accumulation.
+    let mut neighbor_weights = vec![0.0; n];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
+    let mut comm_order: Vec<usize> = Vec::with_capacity(64);
 
     // Continue until no more moves improve modularity or max iterations reached
     loop {
         let mut nb_moves = 0;
 
-        for &node in &nodes {
+        for &node in node_order {
             let current_comm = node_to_comm[node];
-            let node_degree = graph.adj[node].values().sum::<f64>();
+            let node_degree = graph.node_degrees[node];
 
             // Remove node from its current community
-            community_degrees
-                .entry(current_comm)
-                .and_modify(|e| *e -= node_degree);
+            community_degrees[current_comm] -= node_degree;
 
-            // Calculate weights to neighboring communities with insertion order
-            let (neighbor_weights, comm_order) =
-                get_neighbor_weights_ordered(node, node_to_comm, &graph.adj, nx_adjacency);
+            // Clear per-node accumulation buffers.
+            for &comm in &touched_comms {
+                neighbor_weights[comm] = 0.0;
+            }
+            touched_comms.clear();
+            comm_order.clear();
+
+            // Calculate weights to neighboring communities with insertion-order tracking.
+            if let Some(nx_adj) = nx_adjacency {
+                for &neighbor in &nx_adj[node] {
+                    if node == neighbor {
+                        continue;
+                    }
+                    if let Some(&weight) = graph.adj[node].get(&neighbor) {
+                        let comm = node_to_comm[neighbor];
+                        if neighbor_weights[comm] == 0.0 {
+                            touched_comms.push(comm);
+                            comm_order.push(comm);
+                        }
+                        neighbor_weights[comm] += weight;
+                    }
+                }
+            } else {
+                for &neighbor in &graph.neighbor_order[node] {
+                    if node == neighbor {
+                        continue;
+                    }
+                    let Some(&weight) = graph.adj[node].get(&neighbor) else {
+                        continue;
+                    };
+                    let comm = node_to_comm[neighbor];
+                    if neighbor_weights[comm] == 0.0 {
+                        touched_comms.push(comm);
+                        comm_order.push(comm);
+                    }
+                    neighbor_weights[comm] += weight;
+                }
+            }
 
             // Weight to current community for removal cost calculation
 
@@ -268,32 +318,24 @@ fn run_one_level(
             let mut max_gain_overall = 0.0; // Represents total Delta Q for the move
 
             // Calculate cost of removal from current community
-            let weight_to_current = *neighbor_weights.get(&current_comm).unwrap_or(&0.0);
-            let sum_deg_current = *community_degrees.get(&current_comm).unwrap_or(&0.0);
-            let removal_cost = -(weight_to_current / m_2std)
-                + (resolution * sum_deg_current * node_degree / (m_2std * m_2std));
+            let weight_to_current = neighbor_weights[current_comm];
+            let sum_deg_current = community_degrees[current_comm];
+            let removal_cost = -(weight_to_current / m)
+                + resolution * (sum_deg_current * node_degree) / (2.0 * m * m);
 
-            // Iterate over neighbor communities in insertion order
-            // When nx_adjacency is provided, this matches NetworkX's tie-breaking behavior
-            // Otherwise, uses Rust's HashMap iteration order (deterministic but different from NX)
-            for candidate_comm in comm_order {
-                // Skip if it's the same community
-                if candidate_comm == current_comm {
-                    continue;
-                }
-
-                let weight_to_comm = *neighbor_weights.get(&candidate_comm).unwrap_or(&0.0);
+            // Iterate over neighbor communities in insertion order.
+            // When nx_adjacency is provided, this follows NetworkX neighbor ordering
+            // for tie-breaking on the first (non-aggregated) level.
+            for &candidate_comm in &comm_order {
+                let weight_to_comm = neighbor_weights[candidate_comm];
 
                 // Get community degrees before adding node i
-                let sum_deg_target = *community_degrees.get(&candidate_comm).unwrap_or(&0.0);
+                let sum_deg_target = community_degrees[candidate_comm];
 
-                // Gain from adding to target community (NetworkX formula):
-                // ΔQ_add = k_i,in / (2m) - γ * (Σ_tot * k_i) / (2m)²
-                let addition_gain = (weight_to_comm / m_2std)
-                    - (resolution * sum_deg_target * node_degree / (m_2std * m_2std));
-
-                // Total gain = removal_cost + addition_gain
-                let total_gain = removal_cost + addition_gain;
+                // Keep operation order aligned with NetworkX:
+                // gain = remove_cost + wt/m - resolution*(Stot[c]*degree)/(2*m^2)
+                let total_gain = removal_cost + (weight_to_comm / m)
+                    - resolution * (sum_deg_target * node_degree) / (2.0 * m * m);
 
                 // A move is only made if there is a strict improvement in modularity.
                 if total_gain > max_gain_overall {
@@ -302,16 +344,8 @@ fn run_one_level(
                 }
             }
 
-            // If the best gain is not positive, revert to the original community.
-            if max_gain_overall <= 0.0 {
-                best_comm = current_comm;
-            }
-
             // Add node back to the best community found
-            community_degrees
-                .entry(best_comm)
-                .and_modify(|e| *e += node_degree)
-                .or_insert(node_degree);
+            community_degrees[best_comm] += node_degree;
 
             // If we found a better community, move the node
             if best_comm != current_comm {
@@ -358,6 +392,14 @@ fn run_louvain(
         None => Pcg64::from_os_rng(),
     };
 
+    // Exact NetworkX compatibility mode:
+    // when both seed and adjacency are provided, use Python-compatible
+    // Random(seed) semantics in pure Rust for shuffle order.
+    let mut py_compat_shuffle_rng: Option<PythonCompatRng> = match (seed, nx_adjacency.as_ref()) {
+        (Some(s), Some(_)) => Some(PythonCompatRng::new(s)),
+        _ => None,
+    };
+
     // Convert PyGraph to our internal format
     let mut graph_state = GraphState::from_pygraph(py, graph, weight_fn)?;
 
@@ -383,11 +425,21 @@ fn run_louvain(
         };
         first_level = false;
 
+        let node_order = if let Some(py_rng) = py_compat_shuffle_rng.as_mut() {
+            let mut nodes: Vec<usize> = (0..graph_state.num_nodes).collect();
+            py_rng.shuffle(&mut nodes);
+            nodes
+        } else {
+            let mut nodes: Vec<usize> = (0..graph_state.num_nodes).collect();
+            nodes.shuffle(&mut rng);
+            nodes
+        };
+
         improvement = run_one_level(
             &graph_state,
             &mut node_to_comm,
             resolution,
-            &mut rng,
+            &node_order,
             adj_ref,
         );
 
@@ -414,6 +466,10 @@ fn run_louvain(
 
         // Remove empty communities
         partition.retain(|comm| !comm.is_empty());
+        // Canonicalize node order inside communities for deterministic IDs.
+        for comm in &mut partition {
+            comm.sort_unstable();
+        }
 
         // Add this level's partition to results
         partitions.push(partition);
@@ -565,8 +621,8 @@ fn merge_small_communities(
 ///     min_community_size: Optional minimum size for communities. Smaller communities
 ///         will be merged. Default is 1 (no merging).
 ///     adjacency: Optional adjacency list from NetworkX for matching NX behavior.
-///         When provided, the algorithm uses this neighbor order for tie-breaking,
-///         producing results identical to NetworkX's louvain_communities.
+///         When provided, the algorithm uses this neighbor order for tie-breaking
+///         on the first level.
 ///
 /// Returns:
 ///     A list of communities, where each community is a list of node indices.
@@ -649,6 +705,11 @@ pub fn louvain_communities(
         if min_size > 1 {
             final_partition = merge_small_communities(&graph_ref, &final_partition, min_size);
         }
+
+        for comm in &mut final_partition {
+            comm.sort_unstable();
+        }
+        final_partition.sort_by_key(|comm| comm.first().copied().unwrap_or(usize::MAX));
 
         final_partition
     };
@@ -755,8 +816,7 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     // First, calculate the sum of degrees for each community
     for node in 0..gs.num_nodes {
         let comm = node_to_comm[node];
-        let node_degree = gs.adj[node].values().sum::<f64>();
-        *k_c.entry(comm).or_insert(0.0) += node_degree;
+        *k_c.entry(comm).or_insert(0.0) += gs.node_degrees[node];
     }
 
     // Now, calculate the internal edge weights for each community

@@ -27,7 +27,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 foldhash = "0.1.5"
 fixedbitset = "0.5.7"
-indexmap = { version = ">=1.9, <3", features = ["rayon"] }
+indexmap = { version = "=2.10.0", features = ["rayon"] }
 ndarray = { version = "0.16.1", features = ["rayon"] }
 num-traits = "0.2"
 petgraph = "0.8"

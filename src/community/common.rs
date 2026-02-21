@@ -63,6 +63,173 @@ pub(crate) fn choose_random(rng: &mut CommunityRng, candidates: &[usize]) -> usi
 }
 
 // ============================================================================
+// Python-Compatible RNG Utilities
+// ============================================================================
+
+/// A pure-Rust implementation of Python's `random.Random(seed)` core behavior.
+///
+/// This implements MT19937 with the same initialization and `_randbelow` flow
+/// used by CPython for integer seeds, so shuffle/choice order can match
+/// NetworkX behavior without calling back into Python.
+pub(crate) struct PythonCompatRng {
+    mt: [u32; 624],
+    index: usize,
+}
+
+impl PythonCompatRng {
+    #[inline]
+    pub(crate) fn new(seed: u64) -> Self {
+        let mut rng = Self {
+            mt: [0; 624],
+            index: 624,
+        };
+
+        let key_words: [u32; 2] = [seed as u32, (seed >> 32) as u32];
+        let key_len = if key_words[1] == 0 { 1 } else { 2 };
+        rng.init_by_array(&key_words[..key_len]);
+        rng
+    }
+
+    #[inline]
+    fn init_genrand(&mut self, seed: u32) {
+        self.mt[0] = seed;
+        for i in 1..624 {
+            self.mt[i] = 1812433253_u32
+                .wrapping_mul(self.mt[i - 1] ^ (self.mt[i - 1] >> 30))
+                .wrapping_add(i as u32);
+        }
+        self.index = 624;
+    }
+
+    #[inline]
+    fn init_by_array(&mut self, key: &[u32]) {
+        self.init_genrand(19650218_u32);
+
+        let mut i = 1usize;
+        let mut j = 0usize;
+        let mut k = 624usize.max(key.len());
+        while k > 0 {
+            self.mt[i] = (self.mt[i]
+                ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1664525_u32)))
+            .wrapping_add(key[j])
+            .wrapping_add(j as u32);
+
+            i += 1;
+            j += 1;
+            if i >= 624 {
+                self.mt[0] = self.mt[623];
+                i = 1;
+            }
+            if j >= key.len() {
+                j = 0;
+            }
+            k -= 1;
+        }
+
+        k = 623;
+        while k > 0 {
+            self.mt[i] = (self.mt[i]
+                ^ ((self.mt[i - 1] ^ (self.mt[i - 1] >> 30)).wrapping_mul(1566083941_u32)))
+            .wrapping_sub(i as u32);
+
+            i += 1;
+            if i >= 624 {
+                self.mt[0] = self.mt[623];
+                i = 1;
+            }
+            k -= 1;
+        }
+
+        self.mt[0] = 0x8000_0000;
+        self.index = 624;
+    }
+
+    #[inline]
+    fn twist(&mut self) {
+        const MATRIX_A: u32 = 0x9908_b0df;
+        const UPPER_MASK: u32 = 0x8000_0000;
+        const LOWER_MASK: u32 = 0x7fff_ffff;
+
+        for i in 0..227 {
+            let y = (self.mt[i] & UPPER_MASK) | (self.mt[i + 1] & LOWER_MASK);
+            self.mt[i] = self.mt[i + 397] ^ (y >> 1) ^ if (y & 1) != 0 { MATRIX_A } else { 0 };
+        }
+        for i in 227..623 {
+            let y = (self.mt[i] & UPPER_MASK) | (self.mt[i + 1] & LOWER_MASK);
+            self.mt[i] = self.mt[i - 227] ^ (y >> 1) ^ if (y & 1) != 0 { MATRIX_A } else { 0 };
+        }
+        let y = (self.mt[623] & UPPER_MASK) | (self.mt[0] & LOWER_MASK);
+        self.mt[623] = self.mt[396] ^ (y >> 1) ^ if (y & 1) != 0 { MATRIX_A } else { 0 };
+        self.index = 0;
+    }
+
+    #[inline]
+    fn next_u32(&mut self) -> u32 {
+        if self.index >= 624 {
+            self.twist();
+        }
+        let mut y = self.mt[self.index];
+        self.index += 1;
+
+        y ^= y >> 11;
+        y ^= (y << 7) & 0x9d2c_5680;
+        y ^= (y << 15) & 0xefc6_0000;
+        y ^= y >> 18;
+        y
+    }
+
+    #[inline]
+    fn getrandbits_u64(&mut self, mut k: u32) -> u64 {
+        debug_assert!(k > 0 && k <= 64);
+        let words = (k - 1) / 32 + 1;
+        let mut acc = 0_u64;
+        for i in 0..words {
+            let mut r = self.next_u32() as u64;
+            if k < 32 {
+                r >>= 32 - k;
+            }
+            acc |= r << (i * 32);
+            if k > 32 {
+                k -= 32;
+            } else {
+                break;
+            }
+        }
+        acc
+    }
+
+    #[inline]
+    pub(crate) fn randbelow(&mut self, n: usize) -> usize {
+        debug_assert!(n > 0);
+        let k = usize::BITS - n.leading_zeros();
+        loop {
+            let r = self.getrandbits_u64(k) as usize;
+            if r < n {
+                return r;
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn shuffle<T>(&mut self, values: &mut [T]) {
+        if values.len() < 2 {
+            return;
+        }
+        for i in (1..values.len()).rev() {
+            let j = self.randbelow(i + 1);
+            values.swap(i, j);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn choose<'a, T>(&mut self, values: &'a [T]) -> &'a T {
+        debug_assert!(!values.is_empty());
+        let idx = self.randbelow(values.len());
+        &values[idx]
+    }
+}
+
+// ============================================================================
 // Weight Extraction
 // ============================================================================
 
@@ -166,4 +333,45 @@ pub(crate) fn group_by_labels(labels: &[usize]) -> Vec<Vec<usize>> {
     let mut result: Vec<Vec<usize>> = comms.into_values().collect();
     result.sort_by_key(|comm| comm.iter().copied().min().unwrap_or(usize::MAX));
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PythonCompatRng;
+
+    #[test]
+    fn python_compat_randbelow_sequence_matches_python42() {
+        let mut rng = PythonCompatRng::new(42);
+        let expected = [1, 0, 4, 3, 3, 2, 1, 8, 1, 9, 6, 0, 0, 1, 3, 3, 8, 9, 0, 8];
+        let actual: Vec<usize> = (0..expected.len()).map(|_| rng.randbelow(10)).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn python_compat_shuffle_sequence_matches_python42() {
+        let mut rng = PythonCompatRng::new(42);
+
+        let mut first: Vec<usize> = (0..10).collect();
+        rng.shuffle(&mut first);
+        assert_eq!(first, vec![7, 3, 2, 8, 5, 6, 9, 4, 0, 1]);
+
+        let mut second: Vec<usize> = (0..10).collect();
+        rng.shuffle(&mut second);
+        assert_eq!(second, vec![3, 5, 2, 4, 1, 8, 7, 0, 6, 9]);
+    }
+
+    #[test]
+    fn python_compat_randbelow_n1_matches_python42_state_progression() {
+        let mut rng = PythonCompatRng::new(42);
+        // CPython's _randbelow(1) advances RNG state; keep this behavior for
+        // exact shuffle/choice parity with networkx.
+        let expected = [0, 3, 2, 8, 9, 0, 1, 3, 8, 8];
+        let actual: Vec<usize> = (0..expected.len())
+            .map(|_| {
+                let _ = rng.randbelow(1);
+                rng.randbelow(10)
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
 }

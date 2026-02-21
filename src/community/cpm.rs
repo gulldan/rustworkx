@@ -105,6 +105,9 @@ pub fn cpm_communities(py: Python, graph: Py<PyAny>, k: usize) -> PyResult<Vec<V
         for edge in graph_ref.graph.edge_references() {
             let source_idx = edge.source();
             let target_idx = edge.target();
+            if source_idx == target_idx {
+                continue;
+            }
             if let (Some(&s_u32), Some(&t_u32)) = (
                 node_map_fwd_bitset.get(&source_idx),
                 node_map_fwd_bitset.get(&target_idx),
@@ -154,6 +157,9 @@ pub fn cpm_communities(py: Python, graph: Py<PyAny>, k: usize) -> PyResult<Vec<V
         for edge in graph_ref.graph.edge_references() {
             let source_idx = edge.source();
             let target_idx = edge.target();
+            if source_idx == target_idx {
+                continue;
+            }
             if let (Some(&s_u32), Some(&t_u32)) = (
                 node_map_fwd_hashset.get(&source_idx),
                 node_map_fwd_hashset.get(&target_idx),

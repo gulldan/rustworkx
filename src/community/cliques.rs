@@ -56,6 +56,25 @@ pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<us
     let cliques_u32: Vec<Vec<u32>>;
     let node_map_rev: Vec<NodeIndex>;
 
+    // Build adjacency in original node-index space for a final maximality filter.
+    // This guarantees output parity with canonical maximal-clique semantics.
+    let mut original_adjacency: HashMap<usize, HashSet<usize>> = HashMap::with_capacity(node_count);
+    let mut all_original_nodes: Vec<usize> = Vec::with_capacity(node_count);
+    for node_idx in graph_ref.graph.node_indices() {
+        let idx = node_idx.index();
+        all_original_nodes.push(idx);
+        original_adjacency.insert(idx, HashSet::new());
+    }
+    for edge in graph_ref.graph.edge_references() {
+        let s = edge.source().index();
+        let t = edge.target().index();
+        if s == t {
+            continue;
+        }
+        original_adjacency.entry(s).or_default().insert(t);
+        original_adjacency.entry(t).or_default().insert(s);
+    }
+
     // Dispatch based on graph size
     if node_count <= MAX_NODES_FOR_BITSET {
         // --- Use Bitset Implementation ---
@@ -76,6 +95,9 @@ pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<us
             max_node_id = max_node_id.max(node_u32);
         }
         for edge in graph_ref.graph.edge_references() {
+            if edge.source() == edge.target() {
+                continue;
+            }
             if let (Some(&s_u32), Some(&t_u32)) = (
                 node_map_fwd.get(&edge.source()),
                 node_map_fwd.get(&edge.target()),
@@ -113,6 +135,9 @@ pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<us
             max_node_id = max_node_id.max(node_u32);
         }
         for edge in graph_ref.graph.edge_references() {
+            if edge.source() == edge.target() {
+                continue;
+            }
             if let (Some(&s_u32), Some(&t_u32)) = (
                 node_map_fwd.get(&edge.source()),
                 node_map_fwd.get(&edge.target()),
@@ -129,7 +154,7 @@ pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<us
         node_map_rev = node_map_rev_hashset;
     }
 
-    // Convert back to original node indices
+    // Convert back to original node indices.
     let mut result: Vec<Vec<usize>> = Vec::with_capacity(cliques_u32.len());
     for clique_u32 in cliques_u32 {
         let mut clique_usize: Vec<usize> = clique_u32
@@ -140,7 +165,54 @@ pub fn find_maximal_cliques(py: Python, graph: Py<PyAny>) -> PyResult<Vec<Vec<us
         result.push(clique_usize);
     }
 
-    Ok(result)
+    Ok(filter_to_unique_maximal_cliques_usize(
+        result,
+        &original_adjacency,
+        &all_original_nodes,
+    ))
+}
+
+fn filter_to_unique_maximal_cliques_usize(
+    mut cliques: Vec<Vec<usize>>,
+    adjacency: &HashMap<usize, HashSet<usize>>,
+    all_nodes: &[usize],
+) -> Vec<Vec<usize>> {
+    // Canonicalize and deduplicate generated cliques first.
+    for clique in &mut cliques {
+        clique.sort_unstable();
+        clique.dedup();
+    }
+    cliques.retain(|c| !c.is_empty());
+    cliques.sort();
+    cliques.dedup();
+
+    // Keep only cliques that are maximal in the original graph.
+    let mut maximal: Vec<Vec<usize>> = Vec::new();
+    'next_clique: for clique in cliques {
+        for &candidate in all_nodes {
+            if clique.binary_search(&candidate).is_ok() {
+                continue;
+            }
+            let Some(candidate_neighbors) = adjacency.get(&candidate) else {
+                continue;
+            };
+            if clique.iter().all(|&v| candidate_neighbors.contains(&v)) {
+                // A node outside the clique is connected to all clique nodes,
+                // so this clique is not maximal.
+                continue 'next_clique;
+            }
+        }
+        maximal.push(clique);
+    }
+
+    // Deterministic output order by smallest node then full lexicographic order.
+    maximal.sort_by(|a, b| {
+        a.first()
+            .cmp(&b.first())
+            .then_with(|| a.len().cmp(&b.len()))
+            .then_with(|| a.cmp(b))
+    });
+    maximal
 }
 
 // --- Degeneracy Ordering Calculation (copied from cpm.rs) ---
@@ -199,7 +271,6 @@ fn calculate_degeneracy_ordering_bitset(adj: &HashMap<u32, u64>, num_nodes: usiz
             }
         }
     }
-    order.reverse();
     order
 }
 
@@ -261,7 +332,6 @@ fn calculate_degeneracy_ordering_hashset(
             }
         }
     }
-    order.reverse();
     order
 }
 
@@ -285,6 +355,7 @@ fn find_maximal_cliques_degeneracy_bitset(
         potential_clique.push(v);
         let neighbors_v_mask = adj.get(&v).copied().unwrap_or(0);
         let mut candidates_mask: u64 = 0;
+        let mut excluded_mask: u64 = 0;
         let v_pos = node_pos[&v];
         let mut neighbors_iter = neighbors_v_mask;
         while neighbors_iter != 0 {
@@ -294,10 +365,11 @@ fn find_maximal_cliques_degeneracy_bitset(
             if let Some(&n_pos) = node_pos.get(&neighbor) {
                 if n_pos > v_pos {
                     candidates_mask |= 1u64 << neighbor;
+                } else if n_pos < v_pos {
+                    excluded_mask |= 1u64 << neighbor;
                 }
             }
         }
-        let excluded_mask: u64 = 0;
 
         bron_kerbosch_bitset_recursive(
             adj,
@@ -370,12 +442,14 @@ fn find_maximal_cliques_degeneracy_hashset(
         potential_clique.push(v);
         let neighbors_v = adj.get(&v).unwrap_or(&empty_neighbors);
         let mut candidates: HashSet<u32> = HashSet::new();
-        let excluded: HashSet<u32> = HashSet::new();
+        let mut excluded: HashSet<u32> = HashSet::new();
         let v_pos = node_pos[&v];
         for &neighbor in neighbors_v {
             if let Some(&n_pos) = node_pos.get(&neighbor) {
                 if n_pos > v_pos {
                     candidates.insert(neighbor);
+                } else if n_pos < v_pos {
+                    excluded.insert(neighbor);
                 }
             }
         }

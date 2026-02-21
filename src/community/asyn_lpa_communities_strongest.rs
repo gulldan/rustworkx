@@ -14,8 +14,8 @@ use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::prelude::*;
 
 use crate::community::common::{
-    build_rng, choose_random, extract_graph, get_named_weight, group_by_labels, shuffle_nodes,
-    GraphRef,
+    GraphRef, build_rng, choose_random, extract_graph, get_named_weight, group_by_labels,
+    shuffle_nodes,
 };
 
 /// Asynchronous Label Propagation (strongest-edge variant).

@@ -13,6 +13,7 @@ import logging  # Add logging import
 # Import constants from metrics_config.py
 from metrics_config import ORDERED_METRIC_PROPERTIES, JACCARD_THRESHOLDS_TO_TEST
 from benchmark_utils import (
+    format_bool,
     format_memory,
     format_time,
 )  # It seems plotting.py still uses these directly for chart axis formatting
@@ -38,6 +39,19 @@ TABLE_COLUMN_NAMES: list[str] = [m["name"] for m in ORDERED_METRIC_PROPERTIES]
 # Create a dictionary for quick lookup of metric properties by key
 METRIC_KEY_TO_PROPERTIES: dict[str, MetricProperty] = {m["key"]: m for m in ORDERED_METRIC_PROPERTIES}
 
+EXACT_MATCH_MPL_HEADER_LABELS: dict[str, str] = {
+    "_exact_match_nx_louvain": "Exact\nRX vs NX\nLouvain",
+    "_exact_match_nx_lpa": "Exact\nRX vs NX\nLPA",
+    "_exact_match_cdlib_leiden": "Exact\nRX vs\ncdlib Leiden",
+    "_exact_match_leidenalg": "Exact\nRX vs\nleidenalg",
+    "_exact_match_nx_cliques": "Exact\nRX vs NX\nCliques",
+    "_exact_match_nx_cpm": "Exact\nRX vs NX\nCPM",
+}
+TABLE_COLUMN_NAMES_MPL: list[str] = [
+    EXACT_MATCH_MPL_HEADER_LABELS.get(col_key, col_name)
+    for col_key, col_name in zip(TABLE_COLUMN_KEYS, TABLE_COLUMN_NAMES)
+]
+
 # Use ALGORITHMS_CONFIG_STRUCTURE directly, aliasing if needed for minimal changes within functions.
 ALGORITHMS_METADATA: list[dict[str, Any]] = (
     ALGORITHMS_CONFIG_STRUCTURE  # Alias for less refactoring within this file
@@ -45,9 +59,27 @@ ALGORITHMS_METADATA: list[dict[str, Any]] = (
 
 # Make formatter functions easily accessible by string name
 FORMATTER_FUNCTIONS: dict[str, Callable[[Any], str]] = {
+    "format_bool": format_bool,
     "format_time": format_time,
     "format_memory": format_memory,
 }
+
+
+def style_exact_match_markdown_cell(metric_key: str, value_text: str) -> str:
+    """Add color emphasis for exact-match Yes/No values in Markdown tables."""
+    if not metric_key.startswith("_exact_match_"):
+        return value_text
+    if value_text == "Yes":
+        return (
+            '<span style="background-color:#BAFFBA;color:#000;'
+            'padding:0 4px;border-radius:2px;"><strong>Yes</strong></span>'
+        )
+    if value_text == "No":
+        return (
+            '<span style="background-color:#FFBABA;color:#000;'
+            'padding:0 4px;border-radius:2px;"><strong>No</strong></span>'
+        )
+    return value_text
 
 
 def get_valid_benchmark_results(
@@ -564,7 +596,9 @@ def generate_results_table(benchmark_results: BenchmarkResultsList) -> str:
                                     formatted_cell_value = f"{val_fl_md:.3f}"
                             else:
                                 formatted_cell_value = str(raw_metric_val_md)
-                    current_md_row_cells.append(formatted_cell_value)
+                    current_md_row_cells.append(
+                        style_exact_match_markdown_cell(col_key_md, formatted_cell_value)
+                    )
 
             markdown_table_rows.append("| " + " | ".join(current_md_row_cells) + " |")
 
@@ -605,6 +639,14 @@ def get_color_for_cell_mpl(
         or norm_min is None
         or norm_max is None
     ):  # norm_min == norm_max removed to allow coloring even if all values are same (will be mid-color)
+        return "#FFFFFF"
+
+    if metric_prop["key"].startswith("_exact_match_"):
+        exact_status: str = format_bool(value)
+        if exact_status == "Yes":
+            return "#D9FBE0"
+        if exact_status == "No":
+            return "#FEE4E2"
         return "#FFFFFF"
 
     higher_is_better: bool | None = metric_prop.get("higher_is_better")
@@ -877,6 +919,8 @@ def generate_results_table_matplotlib(
             col_widths_plot[c_idx_w_plot] = 0.10
         elif key_w_plot == "algorithm_name":
             col_widths_plot[c_idx_w_plot] = 0.12
+        elif key_w_plot.startswith("_exact_match_"):
+            col_widths_plot[c_idx_w_plot] = 0.07
         elif key_type == "info":
             col_widths_plot[c_idx_w_plot] = 0.05
 
@@ -892,7 +936,7 @@ def generate_results_table_matplotlib(
 
     mpl_table_obj: plt.Table = ax_table_plot.table(
         cellText=table_cell_text_data,
-        colLabels=TABLE_COLUMN_NAMES,
+        colLabels=TABLE_COLUMN_NAMES_MPL,
         colWidths=col_widths_plot,
         loc="center",
         cellLoc="center",
@@ -970,6 +1014,14 @@ def generate_results_table_matplotlib(
                 )
                 cell_obj_to_style.set_facecolor(face_color_cell)
 
+            if metric_prop_for_style["key"].startswith("_exact_match_"):
+                if cell_text_for_style == "Yes":
+                    cell_obj_to_style.get_text().set_color("black")
+                    cell_obj_to_style.get_text().set_weight("bold")
+                elif cell_text_for_style == "No":
+                    cell_obj_to_style.get_text().set_color("black")
+                    cell_obj_to_style.get_text().set_weight("bold")
+
             if best_value_flags[r_style][c_style]:
                 cell_obj_to_style.get_text().set_weight("bold")
                 cell_obj_to_style.get_text().set_color("black")
@@ -978,7 +1030,10 @@ def generate_results_table_matplotlib(
         header_cell_style: plt.Cell = mpl_table_obj[0, c_header_style]
         header_cell_style.get_text().set_weight("bold")
         header_cell_style.set_facecolor("#E0E0E0")
-        header_cell_style.get_text().set_fontsize(7)
+        if TABLE_COLUMN_KEYS[c_header_style].startswith("_exact_match_"):
+            header_cell_style.get_text().set_fontsize(6)
+        else:
+            header_cell_style.get_text().set_fontsize(7)
 
     fig_table.suptitle("Community Detection Benchmark Results", fontsize=18, fontweight="bold", y=0.995)
     plt.tight_layout(pad=0.8)  # Увеличим pad с 0.5 до 0.8

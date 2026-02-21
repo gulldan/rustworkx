@@ -37,6 +37,10 @@ RX_LPA_STRONGEST_COLOR = "#17becf"  # Cyan
 CDLIB_LEIDEN_COLOR = "#8c564b"  # Chestnut Brown
 LEIDENALG_COLOR = "#bcbd22"  # Curry Yellow-Green (original leidenalg)
 NX_LPA_COLOR = "#e377c2"  # Pink
+NX_CLIQUES_COLOR = "#7f7f7f"  # Gray
+RX_CLIQUES_COLOR = "#bcbd22"  # Olive
+NX_CPM_COLOR = "#8c564b"  # Brown
+RX_CPM_COLOR = "#17becf"  # Cyan
 GRID_COLOR = "#E5E5E5"  # Plotting grid color
 
 # --- Centralized Algorithm Configuration Structure ---
@@ -69,7 +73,7 @@ _TUNABLE_ALGOS_SETUP = [
         "color": RX_LEIDEN_COLOR,
         "runner_name": "run_rx_leiden_algorithm",
         "is_rx": True,
-        "needs_adjacency": False,
+        "needs_adjacency": True,  # Use NX adjacency order for closer cross-library parity
     },
 ]
 for algo_setup in _TUNABLE_ALGOS_SETUP:
@@ -85,6 +89,8 @@ for algo_setup in _TUNABLE_ALGOS_SETUP:
                 "is_rx": algo_setup["is_rx"],
                 "run_args": {"resolution": res_val},
                 "needs_adjacency": algo_setup.get("needs_adjacency", False),
+                "max_nodes": algo_setup.get("max_nodes"),
+                "max_edges": algo_setup.get("max_edges"),
             }
         )
 
@@ -140,6 +146,48 @@ _NON_TUNABLE_ALGOS_SETUP = [
         "is_rx": False,
         "run_args": {"seed": 42},
     },
+    {
+        "prefix": "nx_cliques",
+        "name": "NX Cliques (Maximal)",
+        "color": NX_CLIQUES_COLOR,
+        "runner_name": "run_nx_cliques_algorithm",
+        "is_rx": False,
+        "run_args": {},
+        # Maximal-clique enumeration is exponential in worst case; keep benchmark tractable.
+        "max_nodes": 1000,
+        "max_edges": 5000,
+    },
+    {
+        "prefix": "rx_cliques",
+        "name": "RX Cliques (Maximal)",
+        "color": RX_CLIQUES_COLOR,
+        "runner_name": "run_rx_cliques_algorithm",
+        "is_rx": True,
+        "run_args": {},
+        "max_nodes": 1000,
+        "max_edges": 5000,
+    },
+    {
+        "prefix": "nx_cpm_k3",
+        "name": "NX CPM (k=3)",
+        "color": NX_CPM_COLOR,
+        "runner_name": "run_nx_cpm_algorithm",
+        "is_rx": False,
+        "run_args": {"k": 3},
+        # Clique-percolation can also be expensive; keep to small/medium graphs.
+        "max_nodes": 1000,
+        "max_edges": 5000,
+    },
+    {
+        "prefix": "rx_cpm_k3",
+        "name": "RX CPM (k=3)",
+        "color": RX_CPM_COLOR,
+        "runner_name": "run_rx_cpm_algorithm",
+        "is_rx": True,
+        "run_args": {"k": 3},
+        "max_nodes": 1000,
+        "max_edges": 5000,
+    },
 ]
 for algo_setup in _NON_TUNABLE_ALGOS_SETUP:
     ALGORITHMS_CONFIG_STRUCTURE.append(
@@ -152,6 +200,8 @@ for algo_setup in _NON_TUNABLE_ALGOS_SETUP:
             "is_rx": algo_setup["is_rx"],
             "run_args": algo_setup["run_args"],
             "needs_adjacency": algo_setup.get("needs_adjacency", False),
+            "max_nodes": algo_setup.get("max_nodes"),
+            "max_edges": algo_setup.get("max_edges"),
         }
     )
 

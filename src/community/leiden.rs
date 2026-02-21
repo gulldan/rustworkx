@@ -12,36 +12,189 @@
 // https://arxiv.org/abs/1810.08473
 
 use crate::graph::PyGraph;
+use crate::weight_callable;
 use foldhash::{HashMap, HashMapExt};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rand::prelude::*;
-use rand_pcg::Pcg64;
+use rand::RngCore;
+use std::collections::VecDeque;
 
-// Constant for marking unassigned communities
 const UNASSIGNED: usize = usize::MAX;
+const DEFAULT_LEIDEN_ITERATIONS: usize = 2;
+const MAX_OPTIMIZE_PASSES: usize = 100;
+const MIN_GAIN_MOVE: f64 = 10.0 * f64::EPSILON;
+const MT19937_DEFAULT_SEED: u32 = 4357;
+const MT_N: usize = 624;
+const MT_M: usize = 397;
+const MT_UPPER_MASK: u32 = 0x8000_0000;
+const MT_LOWER_MASK: u32 = 0x7fff_ffff;
+const MT_MAGIC: u32 = 0x9908_b0df;
 
-// Default iteration limits for phases
-const MAX_LOCAL_ITER_MOVE: usize = 10;
-const MAX_LOCAL_ITER_REFINE: usize = 10;
+struct LeidenRng {
+    mt: [u32; MT_N],
+    mti: usize,
+}
 
-// ========================
-// Optimized Graph State - uses Vec instead of HashMap for better cache locality
-// ========================
+impl LeidenRng {
+    fn new(seed: u64) -> Self {
+        let mut rng = Self {
+            mt: [0u32; MT_N],
+            mti: MT_N,
+        };
+        rng.seed(seed_to_mt19937(seed));
+        rng
+    }
+
+    fn seed(&mut self, seed: u32) {
+        let actual_seed = if seed == 0 {
+            MT19937_DEFAULT_SEED
+        } else {
+            seed
+        };
+        self.mt = [0u32; MT_N];
+        self.mt[0] = actual_seed;
+        for i in 1..MT_N {
+            self.mt[i] = 1_812_433_253u32
+                .wrapping_mul(self.mt[i - 1] ^ (self.mt[i - 1] >> 30))
+                .wrapping_add(i as u32);
+        }
+        self.mti = MT_N;
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        if self.mti >= MT_N {
+            for kk in 0..(MT_N - MT_M) {
+                let y = (self.mt[kk] & MT_UPPER_MASK) | (self.mt[kk + 1] & MT_LOWER_MASK);
+                self.mt[kk] =
+                    self.mt[kk + MT_M] ^ (y >> 1) ^ if (y & 1) != 0 { MT_MAGIC } else { 0 };
+            }
+            for kk in (MT_N - MT_M)..(MT_N - 1) {
+                let y = (self.mt[kk] & MT_UPPER_MASK) | (self.mt[kk + 1] & MT_LOWER_MASK);
+                self.mt[kk] = self.mt[kk - (MT_N - MT_M)]
+                    ^ (y >> 1)
+                    ^ if (y & 1) != 0 { MT_MAGIC } else { 0 };
+            }
+            let y = (self.mt[MT_N - 1] & MT_UPPER_MASK) | (self.mt[0] & MT_LOWER_MASK);
+            self.mt[MT_N - 1] =
+                self.mt[MT_M - 1] ^ (y >> 1) ^ if (y & 1) != 0 { MT_MAGIC } else { 0 };
+            self.mti = 0;
+        }
+
+        let mut k = self.mt[self.mti];
+        k ^= k >> 11;
+        k ^= (k << 7) & 0x9d2c_5680;
+        k ^= (k << 15) & 0xefc6_0000;
+        k ^= k >> 18;
+        self.mti += 1;
+        k
+    }
+}
+
+#[inline]
+fn seed_to_mt19937(seed: u64) -> u32 {
+    let truncated = seed as u32;
+    if truncated == 0 {
+        MT19937_DEFAULT_SEED
+    } else {
+        truncated
+    }
+}
+
+#[inline]
+fn leiden_rng_get_u32(rng: &mut LeidenRng) -> u32 {
+    rng.next_u32()
+}
+
+#[inline]
+fn leiden_rng_get_u64(rng: &mut LeidenRng) -> u64 {
+    // igraph assembles 64 random bits from two 32-bit draws, high then low.
+    (u64::from(leiden_rng_get_u32(rng)) << 32) | u64::from(leiden_rng_get_u32(rng))
+}
+
+#[inline]
+fn leiden_rng_get_u32_bounded(rng: &mut LeidenRng, range: u32) -> u32 {
+    debug_assert!(range > 0);
+    // Lemire bounded integer sampling, matching igraph's implementation.
+    let threshold = range.wrapping_neg() % range;
+    loop {
+        let x = leiden_rng_get_u32(rng);
+        let m = u64::from(x) * u64::from(range);
+        let low = m as u32;
+        if low >= threshold {
+            return (m >> 32) as u32;
+        }
+    }
+}
+
+#[inline]
+fn leiden_rng_get_u64_bounded(rng: &mut LeidenRng, range: u64) -> u64 {
+    debug_assert!(range > 0);
+    // Lemire bounded integer sampling, matching igraph's implementation.
+    let threshold = range.wrapping_neg() % range;
+    loop {
+        let x = leiden_rng_get_u64(rng);
+        let m = (u128::from(x)) * (u128::from(range));
+        let low = m as u64;
+        if low >= threshold {
+            return (m >> 64) as u64;
+        }
+    }
+}
+
+#[inline]
+fn leiden_rng_get_usize_bounded(rng: &mut LeidenRng, range: usize) -> usize {
+    debug_assert!(range > 0);
+    if range <= u32::MAX as usize {
+        leiden_rng_get_u32_bounded(rng, range as u32) as usize
+    } else {
+        leiden_rng_get_u64_bounded(rng, range as u64) as usize
+    }
+}
+
+#[inline]
+fn leiden_rng_get_integer(rng: &mut LeidenRng, from: usize, to: usize) -> usize {
+    debug_assert!(to >= from);
+    if from == to {
+        return from;
+    }
+    let span = to - from + 1;
+    from + leiden_rng_get_usize_bounded(rng, span)
+}
+
+fn leiden_shuffle_in_place(values: &mut [usize], rng: &mut LeidenRng) {
+    if values.len() <= 1 {
+        return;
+    }
+    for idx in (1..values.len()).rev() {
+        let random_idx = leiden_rng_get_integer(rng, 0, idx);
+        values.swap(idx, random_idx);
+    }
+}
+
 #[derive(Clone)]
 struct GraphState {
     num_nodes: usize,
-    /// Adjacency list: node -> sorted list of (neighbor, weight) pairs
-    /// Pre-sorted for deterministic iteration without runtime sorting
-    adj: Vec<Vec<(usize, f64)>>,
+    /// Neighbor -> edge weight (undirected graph stored symmetrically)
+    adj: Vec<HashMap<usize, f64>>,
+    /// Preserves first-seen neighbor order for deterministic tie-breaking.
+    neighbor_order: Vec<Vec<usize>>,
+    /// Oriented edge list in insertion order (matches igraph edge ordering semantics).
+    edges: Vec<(usize, usize, f64)>,
+    /// Outgoing edge ids per node (for undirected graphs this stores the canonical "from" side).
+    /// Self-loops are stored twice to emulate igraph's LOOPS_TWICE behavior.
+    out_edge_ids: Vec<Vec<usize>>,
+    /// Node size used by Leiden renumbering/collapse (equals 1.0 on original graph).
+    node_sizes: Vec<f64>,
+    /// Weighted degree for each node (self-loop counted twice).
+    node_degrees: Vec<f64>,
+    /// 2m (sum of weighted degrees).
     total_weight: f64,
-    /// Original node indices for each super-node (for aggregation tracking)
+    /// For collapsed graphs: mapping super-node -> original node ids.
     node_metadata: Vec<Vec<usize>>,
 }
 
 impl GraphState {
-    /// Create GraphState from PyGraph with pre-sorted adjacency
     fn from_pygraph(
         py: Python,
         graph: &PyGraph,
@@ -49,27 +202,25 @@ impl GraphState {
         min_weight_filter: Option<f64>,
     ) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
+        let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_nodes];
+        let mut neighbor_order: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
+        let mut edges: Vec<(usize, usize, f64)> = Vec::new();
+        let mut out_edge_ids: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
+        let node_sizes: Vec<f64> = vec![1.0; num_nodes];
 
-        // Use HashMap temporarily to aggregate multi-edges, then convert to sorted Vec
-        let mut adj_map: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_nodes];
         let mut node_metadata: Vec<Vec<usize>> = Vec::with_capacity(num_nodes);
-        let mut total_weight = 0.0;
-
         for i in 0..num_nodes {
             node_metadata.push(vec![i]);
         }
 
         for edge in graph.graph.edge_references() {
-            let u = edge.source().index();
-            let v = edge.target().index();
-            let weight_payload = edge.weight();
+            let src = edge.source().index();
+            let dst = edge.target().index();
+            // igraph canonicalizes undirected edge endpoints so that from <= to.
+            let (u, v) = if src <= dst { (src, dst) } else { (dst, src) };
+            let weight_obj = edge.weight();
 
-            let weight = if let Some(py_weight_fn) = weight_fn {
-                let py_weight = py_weight_fn.bind(py).call1((weight_payload,))?;
-                py_weight.extract::<f64>()?
-            } else {
-                weight_payload.bind(py).extract::<f64>().unwrap_or(1.0)
-            };
+            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
 
             if let Some(min_w) = min_weight_filter {
                 if weight < min_w {
@@ -83,184 +234,767 @@ impl GraphState {
                 ));
             }
 
-            *adj_map[u].entry(v).or_insert(0.0) += weight;
+            if !adj[u].contains_key(&v) {
+                neighbor_order[u].push(v);
+            }
+            *adj[u].entry(v).or_insert(0.0) += weight;
+
             if u != v {
-                *adj_map[v].entry(u).or_insert(0.0) += weight;
-                total_weight += 2.0 * weight;
-            } else {
-                total_weight += 2.0 * weight;
+                if !adj[v].contains_key(&u) {
+                    neighbor_order[v].push(u);
+                }
+                *adj[v].entry(u).or_insert(0.0) += weight;
+            }
+
+            // Keep each (possibly parallel) edge as a distinct entry to mirror igraph/leidenalg
+            // incident-edge traversal. `adj` still stores aggregated weights for move gains.
+            let eid = edges.len();
+            edges.push((u, v, weight));
+            out_edge_ids[u].push(eid);
+            // igraph's incident-list API can return undirected self-loops twice.
+            if u == v {
+                out_edge_ids[u].push(eid);
             }
         }
 
-        // Convert to sorted Vec for cache-friendly iteration
-        let adj: Vec<Vec<(usize, f64)>> = adj_map
-            .into_iter()
-            .map(|map| {
-                let mut vec: Vec<(usize, f64)> = map.into_iter().collect();
-                vec.sort_unstable_by_key(|&(n, _)| n);
-                vec
+        // igraph adjacency/incident iterators return neighbors ordered by
+        // neighbor vertex id for undirected graphs.
+        for neighbors in &mut neighbor_order {
+            neighbors.sort_unstable();
+        }
+        for edge_ids in &mut out_edge_ids {
+            edge_ids.sort_unstable_by_key(|&eid| {
+                let (_, to, _) = edges[eid];
+                (to, eid)
+            });
+        }
+        let node_degrees: Vec<f64> = (0..num_nodes)
+            .map(|node| {
+                // Sum in deterministic igraph-like neighbor order to avoid
+                // floating accumulation drift on weighted graphs.
+                let mut degree = 0.0;
+                for &neighbor in &neighbor_order[node] {
+                    if let Some(weight) = adj[node].get(&neighbor) {
+                        degree += *weight;
+                    }
+                }
+                if let Some(self_loop_weight) = adj[node].get(&node) {
+                    degree += *self_loop_weight;
+                }
+                degree
             })
             .collect();
 
-        Ok(GraphState {
+        let total_weight = edges.iter().map(|(_, _, w)| 2.0 * *w).sum::<f64>();
+
+        Ok(Self {
             num_nodes,
             adj,
+            neighbor_order,
+            edges,
+            out_edge_ids,
+            node_sizes,
+            node_degrees,
             total_weight,
             node_metadata,
         })
     }
 
-    /// Get the degree of a node (sum of weights of its incident edges)
-    #[inline]
-    fn get_node_degree(&self, node_idx: usize) -> f64 {
-        let mut degree: f64 = self.adj[node_idx].iter().map(|&(_, w)| w).sum();
-        // Count self-loop twice in degree
-        for &(nbr, w) in &self.adj[node_idx] {
-            if nbr == node_idx {
-                degree += w;
-                break;
-            }
-        }
-        degree
-    }
-
-    /// Aggregate graph based on partition
-    /// Returns (aggregated_graph, old_comm_id_to_new_node_id mapping)
-    fn aggregate_with_mapping(&self, node_to_comm: &[usize]) -> (Self, HashMap<usize, usize>) {
-        // Find unique communities
-        let mut unique_comms: Vec<usize> = node_to_comm
+    fn collapse_with_membership(&self, membership: &[usize]) -> (Self, Vec<usize>) {
+        let mut unique_comms: Vec<usize> = membership
             .iter()
-            .filter(|&&c| c != UNASSIGNED)
             .copied()
+            .filter(|&c| c != UNASSIGNED)
             .collect();
         unique_comms.sort_unstable();
         unique_comms.dedup();
-        let num_communities = unique_comms.len();
 
-        // Create mapping from old comm to new node id
-        let mut comm_to_new_id: HashMap<usize, usize> = HashMap::with_capacity(num_communities);
-        for (new_id, old_comm_id) in unique_comms.into_iter().enumerate() {
-            comm_to_new_id.insert(old_comm_id, new_id);
+        let mut comm_to_new_id: HashMap<usize, usize> = HashMap::with_capacity(unique_comms.len());
+        for (new_id, old_id) in unique_comms.into_iter().enumerate() {
+            comm_to_new_id.insert(old_id, new_id);
         }
 
-        // Aggregate using HashMap, then convert to Vec
-        let mut new_adj_map: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_communities];
+        let num_communities = comm_to_new_id.len();
         let mut new_node_metadata: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
+        let mut new_node_sizes: Vec<f64> = vec![0.0; num_communities];
+        let mut community_members: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
 
+        let mut old_node_to_new_node = vec![UNASSIGNED; self.num_nodes];
         for node in 0..self.num_nodes {
-            let old_comm = node_to_comm[node];
+            let old_comm = membership[node];
             if old_comm == UNASSIGNED {
                 continue;
             }
-
-            if let Some(&new_node_id) = comm_to_new_id.get(&old_comm) {
-                new_node_metadata[new_node_id].extend(self.node_metadata[node].iter());
-
-                for &(neighbor, weight) in &self.adj[node] {
-                    let neighbor_old_comm = node_to_comm[neighbor];
-                    if neighbor_old_comm == UNASSIGNED {
-                        continue;
-                    }
-
-                    if let Some(&new_neighbor_id) = comm_to_new_id.get(&neighbor_old_comm) {
-                        // Only process each edge once
-                        if node <= neighbor {
-                            if new_neighbor_id == new_node_id {
-                                *new_adj_map[new_node_id]
-                                    .entry(new_neighbor_id)
-                                    .or_insert(0.0) += weight;
-                            } else {
-                                *new_adj_map[new_node_id]
-                                    .entry(new_neighbor_id)
-                                    .or_insert(0.0) += weight;
-                                *new_adj_map[new_neighbor_id]
-                                    .entry(new_node_id)
-                                    .or_insert(0.0) += weight;
-                            }
-                        }
-                    }
-                }
+            if let Some(&new_node) = comm_to_new_id.get(&old_comm) {
+                old_node_to_new_node[node] = new_node;
+                new_node_metadata[new_node].extend(self.node_metadata[node].iter().copied());
+                new_node_sizes[new_node] += self.node_sizes[node];
+                community_members[new_node].push(node);
             }
         }
 
-        // Convert to sorted Vec
-        let new_adj: Vec<Vec<(usize, f64)>> = new_adj_map
-            .into_iter()
-            .map(|map| {
-                let mut vec: Vec<(usize, f64)> = map.into_iter().collect();
-                vec.sort_unstable_by_key(|&(n, _)| n);
-                vec
+        // Match libleidenalg collapse order: iterate communities, then nodes in each
+        // community, then outgoing oriented edges of each node.
+        let mut collapsed_edges: Vec<(usize, usize, f64)> = Vec::new();
+        let mut edge_weight_to_comm = vec![0.0; num_communities];
+        let mut neighbor_comm_added = vec![false; num_communities];
+
+        for v_comm in 0..num_communities {
+            let mut neighbor_communities: Vec<usize> = Vec::new();
+            for &v in &community_members[v_comm] {
+                for &eid in &self.out_edge_ids[v] {
+                    let Some(&(from, to, raw_weight)) = self.edges.get(eid) else {
+                        continue;
+                    };
+                    if from != v {
+                        continue;
+                    }
+
+                    let to_old_comm = membership[to];
+                    if to_old_comm == UNASSIGNED {
+                        continue;
+                    }
+                    let Some(&u_comm) = comm_to_new_id.get(&to_old_comm) else {
+                        continue;
+                    };
+
+                    // In igraph-based implementation, undirected self-loops are visited twice.
+                    // Each visit contributes half weight to keep total loop contribution exact.
+                    let mut w = raw_weight;
+                    if from == to {
+                        w *= 0.5;
+                    }
+
+                    if !neighbor_comm_added[u_comm] {
+                        neighbor_comm_added[u_comm] = true;
+                        neighbor_communities.push(u_comm);
+                    }
+                    edge_weight_to_comm[u_comm] += w;
+                }
+            }
+
+            for u_comm in neighbor_communities {
+                collapsed_edges.push((v_comm, u_comm, edge_weight_to_comm[u_comm]));
+                edge_weight_to_comm[u_comm] = 0.0;
+                neighbor_comm_added[u_comm] = false;
+            }
+        }
+
+        let mut new_adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_communities];
+        let mut new_neighbor_order: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
+        let mut new_edges: Vec<(usize, usize, f64)> = Vec::with_capacity(collapsed_edges.len());
+        let mut new_out_edge_ids: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
+
+        for (raw_from, raw_to, weight) in collapsed_edges {
+            if weight <= 0.0 {
+                continue;
+            }
+
+            // Preserve igraph undirected edge canonical orientation.
+            let (from, to) = if raw_from <= raw_to {
+                (raw_from, raw_to)
+            } else {
+                (raw_to, raw_from)
+            };
+
+            let eid = new_edges.len();
+            new_edges.push((from, to, weight));
+            new_out_edge_ids[from].push(eid);
+            if from == to {
+                new_out_edge_ids[from].push(eid);
+            }
+
+            if !new_adj[from].contains_key(&to) {
+                new_neighbor_order[from].push(to);
+            }
+            *new_adj[from].entry(to).or_insert(0.0) += weight;
+
+            if from != to {
+                if !new_adj[to].contains_key(&from) {
+                    new_neighbor_order[to].push(from);
+                }
+                *new_adj[to].entry(from).or_insert(0.0) += weight;
+            }
+        }
+
+        for neighbors in &mut new_neighbor_order {
+            neighbors.sort_unstable();
+        }
+        for edge_ids in &mut new_out_edge_ids {
+            edge_ids.sort_unstable_by_key(|&eid| {
+                let (_, to, _) = new_edges[eid];
+                (to, eid)
+            });
+        }
+        let node_degrees: Vec<f64> = (0..num_communities)
+            .map(|node| {
+                // Sum in deterministic igraph-like neighbor order to avoid
+                // floating accumulation drift on weighted graphs.
+                let mut degree = 0.0;
+                for &neighbor in &new_neighbor_order[node] {
+                    if let Some(weight) = new_adj[node].get(&neighbor) {
+                        degree += *weight;
+                    }
+                }
+                if let Some(self_loop_weight) = new_adj[node].get(&node) {
+                    degree += *self_loop_weight;
+                }
+                degree
             })
             .collect();
 
+        let total_weight = new_edges.iter().map(|(_, _, w)| 2.0 * *w).sum::<f64>();
+
         (
-            GraphState {
+            Self {
                 num_nodes: num_communities,
                 adj: new_adj,
-                total_weight: self.total_weight,
+                neighbor_order: new_neighbor_order,
+                edges: new_edges,
+                out_edge_ids: new_out_edge_ids,
+                node_sizes: new_node_sizes,
+                node_degrees,
+                total_weight,
                 node_metadata: new_node_metadata,
             },
-            comm_to_new_id,
+            old_node_to_new_node,
         )
     }
 }
 
-// Type alias for RNG used in Leiden algorithm
-type LeidenRng = Pcg64;
+fn ensure_comm_capacity(
+    comm: usize,
+    comm_sizes: &mut Vec<usize>,
+    comm_degrees: &mut Vec<f64>,
+    comm_added: &mut Vec<bool>,
+    weight_to_comm: &mut Vec<f64>,
+) {
+    if comm < comm_sizes.len() {
+        return;
+    }
+    let new_len = comm + 1;
+    comm_sizes.resize(new_len, 0);
+    comm_degrees.resize(new_len, 0.0);
+    comm_added.resize(new_len, false);
+    weight_to_comm.resize(new_len, 0.0);
+}
 
-/// Helper function to find connected components within a subset of nodes
-/// Uses a simple visited array instead of HashSet for better performance
-fn find_connected_components(adj_list: &[Vec<(usize, f64)>], nodes_subset: &[usize]) -> Vec<Vec<usize>> {
-    if nodes_subset.is_empty() {
-        return Vec::new();
+fn renumber_membership_by_size(membership: &mut [usize], node_sizes: Option<&[f64]>) {
+    let mut comm_weight: HashMap<usize, f64> = HashMap::new();
+    let mut comm_nodes: HashMap<usize, usize> = HashMap::new();
+
+    for (node, &comm) in membership.iter().enumerate() {
+        if comm == UNASSIGNED {
+            continue;
+        }
+        let node_weight = node_sizes
+            .and_then(|sizes| sizes.get(node).copied())
+            .unwrap_or(1.0);
+        *comm_weight.entry(comm).or_insert(0.0) += node_weight;
+        *comm_nodes.entry(comm).or_insert(0) += 1;
     }
 
-    // Create a mapping from node index to subset index for O(1) lookup
-    let max_node = *nodes_subset.iter().max().unwrap_or(&0);
-    let mut in_subset = vec![false; max_node + 1];
-    let mut visited = vec![false; max_node + 1];
-
-    for &node in nodes_subset {
-        in_subset[node] = true;
+    if comm_weight.is_empty() {
+        return;
     }
 
-    let mut components = Vec::new();
-    let mut queue = Vec::with_capacity(nodes_subset.len());
+    let mut ranked: Vec<(usize, f64, usize)> = comm_weight
+        .into_iter()
+        .map(|(comm, weight)| (comm, weight, *comm_nodes.get(&comm).unwrap_or(&0)))
+        .collect();
+    ranked.sort_unstable_by(|(a_id, a_w, a_n), (b_id, b_w, b_n)| {
+        b_w.total_cmp(a_w)
+            .then_with(|| b_n.cmp(a_n))
+            .then_with(|| a_id.cmp(b_id))
+    });
 
-    for &start_node in nodes_subset {
-        if visited[start_node] {
+    let mut remap: HashMap<usize, usize> = HashMap::with_capacity(ranked.len());
+    for (new_id, (old_id, _, _)) in ranked.into_iter().enumerate() {
+        remap.insert(old_id, new_id);
+    }
+
+    for comm in membership.iter_mut() {
+        if *comm != UNASSIGNED {
+            *comm = *remap.get(comm).unwrap_or(comm);
+        }
+    }
+}
+
+fn count_communities(membership: &[usize]) -> usize {
+    if membership.is_empty() {
+        return 0;
+    }
+    let max_comm = membership
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+    let mut seen = vec![false; max_comm + 1];
+    let mut count = 0;
+    for &comm in membership {
+        if comm != UNASSIGNED && !seen[comm] {
+            seen[comm] = true;
+            count += 1;
+        }
+    }
+    count
+}
+
+fn canonical_partition_signature(membership: &[usize]) -> Vec<Vec<usize>> {
+    let mut comm_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (node, &comm) in membership.iter().enumerate() {
+        if comm != UNASSIGNED {
+            comm_map.entry(comm).or_default().push(node);
+        }
+    }
+
+    let mut signature: Vec<Vec<usize>> = comm_map.into_values().collect();
+    for comm in &mut signature {
+        comm.sort_unstable();
+    }
+    signature.sort_unstable();
+    signature
+}
+
+fn project_membership_to_original(
+    graph_state: &GraphState,
+    membership: &[usize],
+    original_num_nodes: usize,
+) -> Vec<usize> {
+    let mut projected = vec![UNASSIGNED; original_num_nodes];
+    for (node, &comm) in membership.iter().enumerate().take(graph_state.num_nodes) {
+        for &orig_node in &graph_state.node_metadata[node] {
+            if orig_node < projected.len() {
+                projected[orig_node] = comm;
+            }
+        }
+    }
+
+    // Fallback (should never happen for valid metadata): keep uncovered nodes as singletons.
+    for (idx, comm) in projected.iter_mut().enumerate() {
+        if *comm == UNASSIGNED {
+            *comm = idx;
+        }
+    }
+
+    projected
+}
+
+fn move_nodes(
+    graph: &GraphState,
+    membership: &mut [usize],
+    rng: &mut LeidenRng,
+    resolution: f64,
+    adjacency_override: Option<&Vec<Vec<usize>>>,
+) -> bool {
+    if graph.total_weight <= 0.0 || graph.num_nodes == 0 {
+        return false;
+    }
+
+    let max_comm = membership
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+
+    let mut comm_sizes: Vec<usize> = vec![0; std::cmp::max(graph.num_nodes, max_comm + 1)];
+    let mut comm_degrees: Vec<f64> = vec![0.0; std::cmp::max(graph.num_nodes, max_comm + 1)];
+    for node in 0..graph.num_nodes {
+        let comm = membership[node];
+        if comm == UNASSIGNED {
+            continue;
+        }
+        if comm >= comm_sizes.len() {
+            comm_sizes.resize(comm + 1, 0);
+            comm_degrees.resize(comm + 1, 0.0);
+        }
+        comm_sizes[comm] += 1;
+        comm_degrees[comm] += graph.node_degrees[node];
+    }
+
+    let mut empty_comms: Vec<usize> = comm_sizes
+        .iter()
+        .enumerate()
+        .filter_map(|(comm, &size)| if size == 0 { Some(comm) } else { None })
+        .collect();
+
+    let mut comm_added = vec![false; comm_sizes.len()];
+    let mut weight_to_comm = vec![0.0; comm_sizes.len()];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
+
+    let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
+    leiden_shuffle_in_place(&mut nodes, rng);
+    let mut vertex_order: VecDeque<usize> = nodes.into();
+    let mut is_node_stable = vec![false; graph.num_nodes];
+
+    let m2 = graph.total_weight;
+    let mut moved_any = false;
+
+    while let Some(node) = vertex_order.pop_front() {
+        let current_comm = membership[node];
+        if current_comm == UNASSIGNED {
             continue;
         }
 
-        let mut component = Vec::new();
-        queue.clear();
-        queue.push(start_node);
-        visited[start_node] = true;
+        ensure_comm_capacity(
+            current_comm,
+            &mut comm_sizes,
+            &mut comm_degrees,
+            &mut comm_added,
+            &mut weight_to_comm,
+        );
 
-        while let Some(current) = queue.pop() {
-            component.push(current);
+        touched_comms.clear();
 
-            for &(neighbor, _) in &adj_list[current] {
-                if neighbor <= max_node && in_subset[neighbor] && !visited[neighbor] {
-                    visited[neighbor] = true;
-                    queue.push(neighbor);
+        if let Some(adj) = adjacency_override {
+            if node < adj.len() {
+                for &neighbor in &adj[node] {
+                    if neighbor == node {
+                        continue;
+                    }
+                    let Some(&weight) = graph.adj[node].get(&neighbor) else {
+                        continue;
+                    };
+                    let neighbor_comm = membership[neighbor];
+                    if neighbor_comm == UNASSIGNED {
+                        continue;
+                    }
+                    ensure_comm_capacity(
+                        neighbor_comm,
+                        &mut comm_sizes,
+                        &mut comm_degrees,
+                        &mut comm_added,
+                        &mut weight_to_comm,
+                    );
+                    if !comm_added[neighbor_comm] {
+                        comm_added[neighbor_comm] = true;
+                        touched_comms.push(neighbor_comm);
+                    }
+                    weight_to_comm[neighbor_comm] += weight;
+                }
+            }
+        } else {
+            for &neighbor in &graph.neighbor_order[node] {
+                if neighbor == node {
+                    continue;
+                }
+                let Some(&weight) = graph.adj[node].get(&neighbor) else {
+                    continue;
+                };
+                let neighbor_comm = membership[neighbor];
+                if neighbor_comm == UNASSIGNED {
+                    continue;
+                }
+                ensure_comm_capacity(
+                    neighbor_comm,
+                    &mut comm_sizes,
+                    &mut comm_degrees,
+                    &mut comm_added,
+                    &mut weight_to_comm,
+                );
+                if !comm_added[neighbor_comm] {
+                    comm_added[neighbor_comm] = true;
+                    touched_comms.push(neighbor_comm);
+                }
+                weight_to_comm[neighbor_comm] += weight;
+            }
+        }
+
+        let node_degree = graph.node_degrees[node];
+        let weight_to_current = weight_to_comm.get(current_comm).copied().unwrap_or(0.0);
+        let sum_deg_current_without = comm_degrees[current_comm] - node_degree;
+        let removal_gain = -(weight_to_current / m2)
+            + (resolution * sum_deg_current_without * node_degree / (m2 * m2));
+
+        let mut best_comm = current_comm;
+        let mut best_gain = MIN_GAIN_MOVE;
+
+        for &candidate_comm in &touched_comms {
+            if candidate_comm == current_comm {
+                continue;
+            }
+            let weight_to_candidate = weight_to_comm[candidate_comm];
+            let sum_deg_candidate = comm_degrees[candidate_comm];
+            let gain = removal_gain + (weight_to_candidate / m2)
+                - (resolution * sum_deg_candidate * node_degree / (m2 * m2));
+            if gain > best_gain {
+                best_gain = gain;
+                best_comm = candidate_comm;
+            }
+        }
+
+        if comm_sizes[current_comm] > 1 {
+            if empty_comms.is_empty() {
+                let new_empty = comm_sizes.len();
+                comm_sizes.push(0);
+                comm_degrees.push(0.0);
+                comm_added.push(false);
+                weight_to_comm.push(0.0);
+                empty_comms.push(new_empty);
+            }
+            if let Some(&empty_comm) = empty_comms.last() {
+                if empty_comm != current_comm {
+                    let sum_deg_empty = comm_degrees[empty_comm];
+                    let gain =
+                        removal_gain - (resolution * sum_deg_empty * node_degree / (m2 * m2));
+                    if gain > best_gain {
+                        best_comm = empty_comm;
+                    }
                 }
             }
         }
 
-        if !component.is_empty() {
-            component.sort_unstable();
-            components.push(component);
+        for &comm in &touched_comms {
+            weight_to_comm[comm] = 0.0;
+            comm_added[comm] = false;
+        }
+
+        is_node_stable[node] = true;
+
+        if best_comm != current_comm {
+            moved_any = true;
+
+            let new_comm_was_empty = best_comm < comm_sizes.len() && comm_sizes[best_comm] == 0;
+
+            comm_sizes[current_comm] -= 1;
+            comm_degrees[current_comm] -= node_degree;
+            if comm_sizes[current_comm] == 0 {
+                empty_comms.push(current_comm);
+            }
+
+            membership[node] = best_comm;
+            comm_sizes[best_comm] += 1;
+            comm_degrees[best_comm] += node_degree;
+
+            if new_comm_was_empty {
+                if let Some(pos) = empty_comms.iter().rposition(|&c| c == best_comm) {
+                    empty_comms.remove(pos);
+                }
+            }
+
+            for &neighbor in &graph.neighbor_order[node] {
+                if neighbor == node {
+                    continue;
+                }
+                if is_node_stable[neighbor] && membership[neighbor] != best_comm {
+                    vertex_order.push_back(neighbor);
+                    is_node_stable[neighbor] = false;
+                }
+            }
         }
     }
 
-    components
+    renumber_membership_by_size(membership, Some(&graph.node_sizes));
+    moved_any
 }
 
-/// Find communities in a graph using the Leiden algorithm.
-///
-/// The Leiden algorithm is an iterative community detection algorithm that refines
-/// partitions from the Louvain algorithm to guarantee that communities are well-connected.
+fn merge_nodes_constrained(
+    graph: &GraphState,
+    sub_membership: &mut [usize],
+    constrained_membership: &[usize],
+    rng: &mut LeidenRng,
+    resolution: f64,
+) {
+    if graph.total_weight <= 0.0 || graph.num_nodes == 0 {
+        return;
+    }
+
+    let max_comm = sub_membership
+        .iter()
+        .copied()
+        .filter(|&c| c != UNASSIGNED)
+        .max()
+        .unwrap_or(0);
+
+    let mut sub_sizes: Vec<usize> = vec![0; std::cmp::max(graph.num_nodes, max_comm + 1)];
+    let mut sub_degrees: Vec<f64> = vec![0.0; std::cmp::max(graph.num_nodes, max_comm + 1)];
+
+    for node in 0..graph.num_nodes {
+        let comm = sub_membership[node];
+        if comm == UNASSIGNED {
+            continue;
+        }
+        if comm >= sub_sizes.len() {
+            sub_sizes.resize(comm + 1, 0);
+            sub_degrees.resize(comm + 1, 0.0);
+        }
+        sub_sizes[comm] += 1;
+        sub_degrees[comm] += graph.node_degrees[node];
+    }
+
+    let mut comm_added = vec![false; sub_sizes.len()];
+    let mut weight_to_comm = vec![0.0; sub_sizes.len()];
+    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
+
+    let mut vertex_order: Vec<usize> = (0..graph.num_nodes).collect();
+    leiden_shuffle_in_place(&mut vertex_order, rng);
+
+    let m2 = graph.total_weight;
+
+    for &node in &vertex_order {
+        let current_sub = sub_membership[node];
+        if current_sub == UNASSIGNED {
+            continue;
+        }
+        if current_sub >= sub_sizes.len() {
+            continue;
+        }
+        if sub_sizes[current_sub] != 1 {
+            continue;
+        }
+
+        touched_comms.clear();
+
+        for &neighbor in &graph.neighbor_order[node] {
+            if neighbor == node {
+                continue;
+            }
+            if constrained_membership[neighbor] != constrained_membership[node] {
+                continue;
+            }
+
+            let Some(&weight) = graph.adj[node].get(&neighbor) else {
+                continue;
+            };
+
+            let neighbor_sub = sub_membership[neighbor];
+            if neighbor_sub == UNASSIGNED {
+                continue;
+            }
+
+            if neighbor_sub >= sub_sizes.len() {
+                sub_sizes.resize(neighbor_sub + 1, 0);
+                sub_degrees.resize(neighbor_sub + 1, 0.0);
+                comm_added.resize(neighbor_sub + 1, false);
+                weight_to_comm.resize(neighbor_sub + 1, 0.0);
+            }
+
+            if !comm_added[neighbor_sub] {
+                comm_added[neighbor_sub] = true;
+                touched_comms.push(neighbor_sub);
+            }
+            weight_to_comm[neighbor_sub] += weight;
+        }
+
+        let node_degree = graph.node_degrees[node];
+        let weight_to_current = weight_to_comm.get(current_sub).copied().unwrap_or(0.0);
+        let sum_deg_current_without = sub_degrees[current_sub] - node_degree;
+        let removal_gain = -(weight_to_current / m2)
+            + (resolution * sum_deg_current_without * node_degree / (m2 * m2));
+
+        let mut best_sub = current_sub;
+        let mut best_gain = 0.0;
+
+        for &candidate_sub in &touched_comms {
+            if candidate_sub == current_sub {
+                continue;
+            }
+            let weight_to_candidate = weight_to_comm[candidate_sub];
+            let sum_deg_candidate = sub_degrees[candidate_sub];
+            let gain = removal_gain + (weight_to_candidate / m2)
+                - (resolution * sum_deg_candidate * node_degree / (m2 * m2));
+            if gain >= best_gain {
+                best_gain = gain;
+                best_sub = candidate_sub;
+            }
+        }
+
+        for &comm in &touched_comms {
+            weight_to_comm[comm] = 0.0;
+            comm_added[comm] = false;
+        }
+
+        if best_sub != current_sub {
+            sub_membership[node] = best_sub;
+            sub_sizes[current_sub] -= 1;
+            sub_degrees[current_sub] -= node_degree;
+            sub_sizes[best_sub] += 1;
+            sub_degrees[best_sub] += node_degree;
+        }
+    }
+
+    renumber_membership_by_size(sub_membership, Some(&graph.node_sizes));
+}
+
+fn optimise_once(
+    original_graph: &GraphState,
+    initial_membership: &[usize],
+    rng: &mut LeidenRng,
+    resolution: f64,
+    adjacency_first_level: Option<&Vec<Vec<usize>>>,
+) -> Vec<usize> {
+    let original_num_nodes = original_graph.num_nodes;
+
+    let mut current_graph = original_graph.clone();
+    let mut current_membership = initial_membership.to_vec();
+    let mut first_level = true;
+
+    for _ in 0..MAX_OPTIMIZE_PASSES {
+        let adjacency_for_move = if first_level {
+            adjacency_first_level
+        } else {
+            None
+        };
+        first_level = false;
+
+        move_nodes(
+            &current_graph,
+            &mut current_membership,
+            rng,
+            resolution,
+            adjacency_for_move,
+        );
+
+        let mut projected =
+            project_membership_to_original(&current_graph, &current_membership, original_num_nodes);
+        renumber_membership_by_size(&mut projected, None);
+
+        let current_comm_count = count_communities(&current_membership);
+
+        let mut sub_membership: Vec<usize> = (0..current_graph.num_nodes).collect();
+        merge_nodes_constrained(
+            &current_graph,
+            &mut sub_membership,
+            &current_membership,
+            rng,
+            resolution,
+        );
+
+        let (next_graph, old_node_to_new_node) =
+            current_graph.collapse_with_membership(&sub_membership);
+
+        let mut next_membership = vec![UNASSIGNED; next_graph.num_nodes];
+        for old_node in 0..current_graph.num_nodes {
+            let new_node = old_node_to_new_node[old_node];
+            if new_node < next_membership.len() {
+                next_membership[new_node] = current_membership[old_node];
+            }
+        }
+        for comm in &mut next_membership {
+            if *comm == UNASSIGNED {
+                *comm = 0;
+            }
+        }
+
+        let aggregate_further = next_graph.num_nodes < current_graph.num_nodes
+            && current_graph.num_nodes > current_comm_count;
+
+        if !aggregate_further {
+            return projected;
+        }
+
+        current_graph = next_graph;
+        current_membership = next_membership;
+    }
+
+    let mut projected =
+        project_membership_to_original(&current_graph, &current_membership, original_num_nodes);
+    renumber_membership_by_size(&mut projected, None);
+    projected
+}
+
 #[pyfunction(
     signature = (graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None),
     text_signature = "(graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None)"
@@ -276,7 +1010,6 @@ pub fn leiden_communities(
     return_hierarchy: Option<bool>,
     adjacency: Option<Py<PyAny>>,
 ) -> PyResult<Vec<Vec<usize>>> {
-    // Input Validation
     let rx_mod = py.import("rustworkx")?;
     let py_graph_type = rx_mod.getattr("PyGraph")?;
     if !graph.bind(py).is_instance(&py_graph_type)? {
@@ -284,641 +1017,99 @@ pub fn leiden_communities(
             "Input graph must be a PyGraph instance.",
         ));
     }
+
     let graph_ref = graph.bind(py).extract::<PyGraph>()?;
     if graph_ref.graph.node_count() == 0 {
         return Ok(Vec::new());
     }
-
     if graph_ref.graph.is_directed() {
         return Err(PyValueError::new_err(
             "Leiden algorithm currently only supports undirected graphs.",
         ));
     }
 
-    // Initialize RNG
     let mut rng: LeidenRng = match seed {
-        Some(s) => Pcg64::seed_from_u64(s),
-        None => Pcg64::from_os_rng(),
+        Some(s) => LeidenRng::new(s),
+        None => {
+            let mut trng = rand::rng();
+            LeidenRng::new(u64::from(trng.next_u32()))
+        }
     };
 
-    let max_outer_iterations = max_iterations.unwrap_or(0);
-    let run_until_convergence = max_outer_iterations == 0;
-    let weight_fn_ref = &weight_fn;
     let _should_return_hierarchy = return_hierarchy.unwrap_or(false);
-    let epsilon = 1e-9;
 
-    // Parse adjacency list if provided
     let nx_adjacency: Option<Vec<Vec<usize>>> = if let Some(adj_obj) = &adjacency {
         Some(adj_obj.extract(py)?)
     } else {
         None
     };
 
-    // Build graph state
-    let original_graph_state =
-        GraphState::from_pygraph(py, &graph_ref, weight_fn_ref, min_weight)?;
+    let original_graph_state = GraphState::from_pygraph(py, &graph_ref, &weight_fn, min_weight)?;
     let original_num_nodes = original_graph_state.num_nodes;
 
-    // Pre-calculate node degrees (reused across iterations)
-    let original_node_degrees: Vec<f64> = (0..original_num_nodes)
-        .map(|i| original_graph_state.get_node_degree(i))
-        .collect();
+    let mut membership_original: Vec<usize> = (0..original_num_nodes).collect();
 
-    // Current partition (start with singleton)
-    let mut node_to_comm: Vec<usize> = (0..original_num_nodes).collect();
+    let run_until_convergence = max_iterations == Some(0);
+    let fixed_iterations = if run_until_convergence {
+        MAX_OPTIMIZE_PASSES
+    } else {
+        max_iterations.unwrap_or(DEFAULT_LEIDEN_ITERATIONS)
+    };
 
-    // Pre-allocate comm_degrees as Vec for O(1) access
-    // Use a larger capacity to avoid resizing
-    let mut comm_degrees: Vec<f64> = vec![0.0; original_num_nodes];
-    for (node, &deg) in original_node_degrees.iter().enumerate() {
-        comm_degrees[node] = deg;
-    }
+    let mut prev_signature = canonical_partition_signature(&membership_original);
 
-    // Reusable buffers for phase 1
-    let mut nodes: Vec<usize> = (0..original_num_nodes).collect();
-    let mut neighbor_comm_weights: Vec<f64> = vec![0.0; original_num_nodes];
-    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
-
-    // Outer iteration loop
-    let mut outer_iteration = 0;
-    loop {
-        outer_iteration += 1;
-        if !run_until_convergence && outer_iteration > max_outer_iterations {
-            break;
-        }
-        if outer_iteration > 100 {
-            break;
-        }
-
-        // Phase 1: Local moving
-        let adj_ref = if outer_iteration == 1 {
+    for iter in 0..fixed_iterations {
+        let adj_for_iteration = if iter == 0 {
             nx_adjacency.as_ref()
         } else {
             None
         };
 
-        let improved = run_phase1_local_moves_optimized(
+        let mut next_membership = optimise_once(
             &original_graph_state,
-            &original_node_degrees,
-            &mut node_to_comm,
-            &mut comm_degrees,
+            &membership_original,
             &mut rng,
             resolution,
-            epsilon,
-            adj_ref,
-            &mut nodes,
-            &mut neighbor_comm_weights,
-            &mut touched_comms,
+            adj_for_iteration,
         );
+        renumber_membership_by_size(&mut next_membership, None);
 
-        if !improved && outer_iteration > 1 {
+        let next_signature = canonical_partition_signature(&next_membership);
+        let changed = next_signature != prev_signature;
+
+        membership_original = next_membership;
+        prev_signature = next_signature;
+
+        if run_until_convergence && !changed {
             break;
-        }
-
-        // Phase 2: Refinement
-        let refined_node_to_comm = run_phase2_refinement_optimized(
-            &original_graph_state,
-            &original_node_degrees,
-            &node_to_comm,
-            &mut rng,
-            resolution,
-            epsilon,
-        );
-
-        // Phase 3: Aggregate
-        let (aggregated_graph, old_comm_to_agg_node) =
-            original_graph_state.aggregate_with_mapping(&refined_node_to_comm);
-
-        if aggregated_graph.num_nodes == original_num_nodes || aggregated_graph.num_nodes <= 1 {
-            node_to_comm = refined_node_to_comm;
-            break;
-        }
-
-        // Recursively optimize aggregated graph
-        let agg_partition =
-            run_leiden_on_aggregated_optimized(&aggregated_graph, &mut rng, resolution, epsilon);
-
-        // Map back to original nodes
-        for orig_node in 0..original_num_nodes {
-            let old_comm_id = refined_node_to_comm[orig_node];
-            if let Some(&agg_node_id) = old_comm_to_agg_node.get(&old_comm_id) {
-                if agg_node_id < agg_partition.len() {
-                    node_to_comm[orig_node] = agg_partition[agg_node_id];
-                }
-            }
-        }
-
-        // Renumber communities to be contiguous
-        let mut unique_comms: Vec<usize> = node_to_comm.iter().copied().collect();
-        unique_comms.sort_unstable();
-        unique_comms.dedup();
-        let comm_to_new_id: HashMap<usize, usize> = unique_comms
-            .into_iter()
-            .enumerate()
-            .map(|(new_id, old_id)| (old_id, new_id))
-            .collect();
-        for c in node_to_comm.iter_mut() {
-            *c = *comm_to_new_id.get(c).unwrap_or(c);
-        }
-
-        // Reset comm_degrees for next iteration
-        comm_degrees.fill(0.0);
-        if comm_degrees.len() < original_num_nodes {
-            comm_degrees.resize(original_num_nodes, 0.0);
-        }
-        for (node, &deg) in original_node_degrees.iter().enumerate() {
-            let comm = node_to_comm[node];
-            if comm < comm_degrees.len() {
-                comm_degrees[comm] += deg;
-            }
         }
     }
 
-    // Build final communities
-    let mut final_comm_map: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (node, &comm) in node_to_comm.iter().enumerate() {
+    renumber_membership_by_size(&mut membership_original, None);
+
+    let mut comm_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (node, &comm) in membership_original.iter().enumerate() {
         if comm != UNASSIGNED {
-            final_comm_map.entry(comm).or_default().push(node);
+            comm_map.entry(comm).or_default().push(node);
         }
     }
 
-    let mut sorted_comm_ids: Vec<_> = final_comm_map.keys().copied().collect();
-    sorted_comm_ids.sort_unstable();
-    let mut result: Vec<Vec<usize>> = sorted_comm_ids
-        .into_iter()
-        .map(|comm_id| final_comm_map.remove(&comm_id).unwrap())
-        .collect();
-    result.sort_by_key(|c| usize::MAX - c.len());
+    let mut comm_ids: Vec<usize> = comm_map.keys().copied().collect();
+    comm_ids.sort_unstable_by(|a, b| {
+        let size_a = comm_map.get(a).map_or(0, Vec::len);
+        let size_b = comm_map.get(b).map_or(0, Vec::len);
+        size_b.cmp(&size_a).then_with(|| a.cmp(b))
+    });
+
+    let mut result = Vec::with_capacity(comm_ids.len());
+    for comm_id in comm_ids {
+        if let Some(mut comm_nodes) = comm_map.remove(&comm_id) {
+            comm_nodes.sort_unstable();
+            if !comm_nodes.is_empty() {
+                result.push(comm_nodes);
+            }
+        }
+    }
 
     Ok(result)
-}
-
-/// Optimized Phase 1: Local move phase
-#[allow(clippy::too_many_arguments)]
-fn run_phase1_local_moves_optimized(
-    graph_state: &GraphState,
-    node_degrees: &[f64],
-    node_to_comm: &mut [usize],
-    comm_degrees: &mut Vec<f64>,
-    rng: &mut LeidenRng,
-    resolution: f64,
-    epsilon: f64,
-    nx_adjacency: Option<&Vec<Vec<usize>>>,
-    nodes: &mut Vec<usize>,
-    neighbor_comm_weights: &mut Vec<f64>,
-    touched_comms: &mut Vec<usize>,
-) -> bool {
-    let mut overall_improvement = false;
-    let mut local_iter = 0;
-    let m2 = graph_state.total_weight;
-
-    // Ensure buffers are large enough
-    let max_comm = node_to_comm.iter().max().copied().unwrap_or(0);
-    if neighbor_comm_weights.len() <= max_comm {
-        neighbor_comm_weights.resize(max_comm + 1, 0.0);
-    }
-
-    loop {
-        let mut current_iteration_improvement = false;
-        local_iter += 1;
-
-        // Reset and shuffle nodes
-        nodes.clear();
-        nodes.extend(0..graph_state.num_nodes);
-        nodes.shuffle(rng);
-
-        for &node in nodes.iter() {
-            let current_comm = node_to_comm[node];
-            let node_degree = node_degrees[node];
-
-            // Ensure comm_degrees is large enough
-            while comm_degrees.len() <= current_comm {
-                comm_degrees.push(0.0);
-            }
-
-            let current_comm_deg = comm_degrees[current_comm];
-            if current_comm_deg < epsilon && node_degree < epsilon {
-                continue;
-            }
-
-            // Temporarily remove node from its community
-            comm_degrees[current_comm] -= node_degree;
-            if comm_degrees[current_comm] < 0.0 {
-                comm_degrees[current_comm] = 0.0;
-            }
-
-            // Clear previous iteration's data
-            for &comm in touched_comms.iter() {
-                if comm < neighbor_comm_weights.len() {
-                    neighbor_comm_weights[comm] = 0.0;
-                }
-            }
-            touched_comms.clear();
-
-            // Collect neighbor community weights
-            if let Some(adj) = nx_adjacency {
-                for &neighbor in &adj[node] {
-                    if node == neighbor {
-                        continue;
-                    }
-                    // Find weight in graph_state.adj
-                    for &(nbr, w) in &graph_state.adj[node] {
-                        if nbr == neighbor {
-                            let neighbor_comm = node_to_comm[neighbor];
-                            while neighbor_comm_weights.len() <= neighbor_comm {
-                                neighbor_comm_weights.push(0.0);
-                            }
-                            if neighbor_comm_weights[neighbor_comm] == 0.0 {
-                                touched_comms.push(neighbor_comm);
-                            }
-                            neighbor_comm_weights[neighbor_comm] += w;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                for &(neighbor, weight) in &graph_state.adj[node] {
-                    if node == neighbor {
-                        continue;
-                    }
-                    let neighbor_comm = node_to_comm[neighbor];
-                    while neighbor_comm_weights.len() <= neighbor_comm {
-                        neighbor_comm_weights.push(0.0);
-                    }
-                    if neighbor_comm_weights[neighbor_comm] == 0.0 {
-                        touched_comms.push(neighbor_comm);
-                    }
-                    neighbor_comm_weights[neighbor_comm] += weight;
-                }
-            }
-
-            // Compute gain for staying in current community
-            let weight_to_current = neighbor_comm_weights.get(current_comm).copied().unwrap_or(0.0);
-            let sum_deg_current = comm_degrees.get(current_comm).copied().unwrap_or(0.0);
-            let removal_cost =
-                -(weight_to_current / m2) + (resolution * sum_deg_current * node_degree / (m2 * m2));
-
-            let mut best_comm = current_comm;
-            let mut max_gain_overall = 0.0;
-
-            // Check all neighboring communities
-            for &target_comm in touched_comms.iter() {
-                if target_comm == current_comm {
-                    continue;
-                }
-                let weight_to_comm = neighbor_comm_weights[target_comm];
-                let sum_deg_target = comm_degrees.get(target_comm).copied().unwrap_or(0.0);
-                let addition_gain =
-                    (weight_to_comm / m2) - (resolution * sum_deg_target * node_degree / (m2 * m2));
-                let total_gain = removal_cost + addition_gain;
-                if total_gain > max_gain_overall + epsilon {
-                    max_gain_overall = total_gain;
-                    best_comm = target_comm;
-                }
-            }
-
-            if max_gain_overall <= 0.0 {
-                best_comm = current_comm;
-            }
-
-            // Move node if beneficial
-            if max_gain_overall > epsilon && best_comm != current_comm {
-                node_to_comm[node] = best_comm;
-                current_iteration_improvement = true;
-                while comm_degrees.len() <= best_comm {
-                    comm_degrees.push(0.0);
-                }
-                comm_degrees[best_comm] += node_degree;
-            } else {
-                comm_degrees[current_comm] += node_degree;
-            }
-        }
-
-        if current_iteration_improvement {
-            overall_improvement = true;
-        } else {
-            break;
-        }
-
-        if local_iter >= MAX_LOCAL_ITER_MOVE {
-            break;
-        }
-    }
-
-    overall_improvement
-}
-
-/// Optimized Phase 2: Refinement phase
-fn run_phase2_refinement_optimized(
-    graph_state: &GraphState,
-    node_degrees: &[f64],
-    current_node_to_comm: &[usize],
-    rng: &mut LeidenRng,
-    resolution: f64,
-    epsilon: f64,
-) -> Vec<usize> {
-    let mut refined_node_to_comm = current_node_to_comm.to_vec();
-    let mut next_global_comm_id = current_node_to_comm
-        .iter()
-        .filter(|&&c| c != UNASSIGNED)
-        .max()
-        .map_or(0, |m| m + 1);
-
-    // Build communities to refine
-    let mut comm_to_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
-    for (node, &comm) in current_node_to_comm.iter().enumerate() {
-        if comm != UNASSIGNED {
-            comm_to_nodes.entry(comm).or_default().push(node);
-        }
-    }
-
-    let mut comm_ids: Vec<usize> = comm_to_nodes.keys().copied().collect();
-    comm_ids.sort_unstable();
-
-    for comm_id in comm_ids {
-        let mut nodes_in_comm = comm_to_nodes.remove(&comm_id).unwrap();
-        if nodes_in_comm.len() <= 1 {
-            continue;
-        }
-
-        // Initialize each node as its own sub-community
-        let max_node = *nodes_in_comm.iter().max().unwrap();
-        let mut local_node_to_subcomm: Vec<usize> = vec![UNASSIGNED; max_node + 1];
-        for &n in &nodes_in_comm {
-            local_node_to_subcomm[n] = n;
-        }
-
-        // Precompute local degrees
-        let mut in_comm = vec![false; max_node + 1];
-        for &n in &nodes_in_comm {
-            in_comm[n] = true;
-        }
-
-        let mut local_degree: Vec<f64> = vec![0.0; max_node + 1];
-        for &u in &nodes_in_comm {
-            let mut deg = 0.0;
-            for &(v, w) in &graph_state.adj[u] {
-                if v <= max_node && in_comm[v] {
-                    deg += w;
-                }
-            }
-            // Add self-loop twice
-            for &(v, w) in &graph_state.adj[u] {
-                if v == u {
-                    deg += w;
-                    break;
-                }
-            }
-            local_degree[u] = deg;
-        }
-
-        // Refinement iterations
-        let mut improved = true;
-        let mut iters = 0;
-
-        // Buffers for sub-community tracking
-        let mut subcomm_sigma_tot: Vec<f64> = vec![0.0; max_node + 1];
-
-        while improved && iters < MAX_LOCAL_ITER_REFINE {
-            improved = false;
-            iters += 1;
-
-            nodes_in_comm.shuffle(rng);
-
-            // Compute sigma_tot per sub-community
-            subcomm_sigma_tot.fill(0.0);
-            for &node in &nodes_in_comm {
-                let sub = local_node_to_subcomm[node];
-                subcomm_sigma_tot[sub] += local_degree[node];
-            }
-
-            for &node in &nodes_in_comm {
-                let current_sub = local_node_to_subcomm[node];
-                let node_deg = local_degree[node];
-
-                if subcomm_sigma_tot[current_sub] < epsilon {
-                    continue;
-                }
-
-                // Temporarily remove node
-                subcomm_sigma_tot[current_sub] -= node_deg;
-                if subcomm_sigma_tot[current_sub] < 0.0 {
-                    subcomm_sigma_tot[current_sub] = 0.0;
-                }
-
-                // Collect weights to sub-communities
-                let mut weight_to_sub: HashMap<usize, f64> = HashMap::new();
-                for &(nbr, w) in &graph_state.adj[node] {
-                    if nbr <= max_node && in_comm[nbr] && node != nbr {
-                        let nbr_sub = local_node_to_subcomm[nbr];
-                        *weight_to_sub.entry(nbr_sub).or_insert(0.0) += w;
-                    }
-                }
-
-                let m2 = graph_state.total_weight;
-                let w_to_current = weight_to_sub.get(&current_sub).copied().unwrap_or(0.0);
-                let sigma_current = subcomm_sigma_tot[current_sub];
-                let removal_gain =
-                    -(w_to_current / m2) + (resolution * sigma_current * node_deg / (m2 * m2));
-
-                let mut best_sub = current_sub;
-                let mut best_gain = 0.0;
-
-                for (&target_sub, &w_to_target) in &weight_to_sub {
-                    if target_sub == current_sub {
-                        continue;
-                    }
-                    let sigma_target = subcomm_sigma_tot[target_sub];
-                    let add_gain =
-                        (w_to_target / m2) - (resolution * sigma_target * node_deg / (m2 * m2));
-                    let total_gain = removal_gain + add_gain;
-                    if total_gain > best_gain + epsilon {
-                        best_gain = total_gain;
-                        best_sub = target_sub;
-                    }
-                }
-
-                if best_gain > epsilon && best_sub != current_sub {
-                    local_node_to_subcomm[node] = best_sub;
-                    subcomm_sigma_tot[best_sub] += node_deg;
-                    improved = true;
-                } else {
-                    subcomm_sigma_tot[current_sub] += node_deg;
-                }
-            }
-        }
-
-        // Build final sub-communities and enforce connectivity
-        let mut sub_to_nodes: HashMap<usize, Vec<usize>> = HashMap::new();
-        for &node in &nodes_in_comm {
-            let sub = local_node_to_subcomm[node];
-            sub_to_nodes.entry(sub).or_default().push(node);
-        }
-
-        let mut enforced: Vec<Vec<usize>> = Vec::new();
-        for (_, nodes) in sub_to_nodes {
-            if nodes.len() <= 1 {
-                enforced.push(nodes);
-            } else {
-                let comps = find_connected_components(&graph_state.adj, &nodes);
-                for comp in comps {
-                    enforced.push(comp);
-                }
-            }
-        }
-
-        // Merge components if beneficial
-        let m2 = graph_state.total_weight;
-        let mut comps = enforced;
-
-        loop {
-            let n = comps.len();
-            if n <= 1 {
-                break;
-            }
-
-            // Build node -> comp index
-            let max_n = comps.iter().flat_map(|c| c.iter()).max().copied().unwrap_or(0);
-            let mut node_to_ci = vec![UNASSIGNED; max_n + 1];
-            for (ci, nodes) in comps.iter().enumerate() {
-                for &u in nodes {
-                    node_to_ci[u] = ci;
-                }
-            }
-
-            // Sigma per component
-            let mut sigma: Vec<f64> = vec![0.0; n];
-            for (ci, nodes) in comps.iter().enumerate() {
-                for &u in nodes {
-                    sigma[ci] += node_degrees[u];
-                }
-            }
-
-            // Cross weights (upper triangular)
-            let mut e: Vec<Vec<f64>> = vec![vec![0.0; n]; n];
-            for (ci, nodes) in comps.iter().enumerate() {
-                for &u in nodes {
-                    for &(v, w) in &graph_state.adj[u] {
-                        if u < v && v <= max_n {
-                            let cj = node_to_ci[v];
-                            if cj != UNASSIGNED && ci != cj {
-                                let (a, b) = if ci < cj { (ci, cj) } else { (cj, ci) };
-                                e[a][b] += w;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Find best merge
-            let mut best_gain = 0.0f64;
-            let mut best_pair: Option<(usize, usize)> = None;
-            for i in 0..n {
-                for j in (i + 1)..n {
-                    let eij = e[i][j];
-                    if eij <= 0.0 {
-                        continue;
-                    }
-                    let gain = 2.0 * ((eij / m2) - (resolution * sigma[i] * sigma[j] / (m2 * m2)));
-                    if gain > best_gain {
-                        best_gain = gain;
-                        best_pair = Some((i, j));
-                    }
-                }
-            }
-
-            if let Some((i, j)) = best_pair {
-                if best_gain > epsilon {
-                    let comp_j = comps.remove(j);
-                    comps[i].extend(comp_j);
-                    continue;
-                }
-            }
-            break;
-        }
-
-        // Assign refined IDs
-        comps.sort_by_key(|c| usize::MAX - c.len());
-        for (idx, comp) in comps.into_iter().enumerate() {
-            let new_id = if idx == 0 {
-                comm_id
-            } else {
-                let id = next_global_comm_id;
-                next_global_comm_id += 1;
-                id
-            };
-            for node in comp {
-                refined_node_to_comm[node] = new_id;
-            }
-        }
-    }
-
-    refined_node_to_comm
-}
-
-/// Optimized recursive Leiden on aggregated graph
-fn run_leiden_on_aggregated_optimized(
-    graph_state: &GraphState,
-    rng: &mut LeidenRng,
-    resolution: f64,
-    epsilon: f64,
-) -> Vec<usize> {
-    let num_nodes = graph_state.num_nodes;
-    if num_nodes <= 1 {
-        return (0..num_nodes).collect();
-    }
-
-    let node_degrees: Vec<f64> = (0..num_nodes)
-        .map(|i| graph_state.get_node_degree(i))
-        .collect();
-
-    let mut node_to_comm: Vec<usize> = (0..num_nodes).collect();
-    let mut comm_degrees: Vec<f64> = node_degrees.clone();
-
-    // Reusable buffers
-    let mut nodes: Vec<usize> = (0..num_nodes).collect();
-    let mut neighbor_comm_weights: Vec<f64> = vec![0.0; num_nodes];
-    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
-
-    run_phase1_local_moves_optimized(
-        graph_state,
-        &node_degrees,
-        &mut node_to_comm,
-        &mut comm_degrees,
-        rng,
-        resolution,
-        epsilon,
-        None,
-        &mut nodes,
-        &mut neighbor_comm_weights,
-        &mut touched_comms,
-    );
-
-    let refined = run_phase2_refinement_optimized(
-        graph_state,
-        &node_degrees,
-        &node_to_comm,
-        rng,
-        resolution,
-        epsilon,
-    );
-
-    let (aggregated, old_comm_to_agg_node) = graph_state.aggregate_with_mapping(&refined);
-
-    if aggregated.num_nodes == num_nodes || aggregated.num_nodes <= 1 {
-        return refined;
-    }
-
-    let agg_partition = run_leiden_on_aggregated_optimized(&aggregated, rng, resolution, epsilon);
-
-    let mut result = vec![0; num_nodes];
-    for node in 0..num_nodes {
-        let old_comm_id = refined[node];
-        if let Some(&agg_node_id) = old_comm_to_agg_node.get(&old_comm_id) {
-            if agg_node_id < agg_partition.len() {
-                result[node] = agg_partition[agg_node_id];
-            }
-        }
-    }
-    result
 }
