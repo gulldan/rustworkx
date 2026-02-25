@@ -45,9 +45,7 @@ def _run_rx_leiden_on_weighted_edges(num_nodes, weighted_edges):
     for u, v, weight in weighted_edges:
         graph.add_edge(u, v, float(weight))
 
-    communities = rx.community.leiden_communities(
-        graph, weight_fn=lambda edge: float(edge), resolution=1.0, seed=42
-    )
+    communities = rx.community.leiden_communities(graph, resolution=1.0, seed=42)
     return [set(comm) for comm in communities]
 
 
@@ -59,7 +57,7 @@ def test_louvain_matches_nx_count():
 
     seed = 42
     nx_comms = nx.community.louvain_communities(nx_g, weight="weight", seed=seed)
-    rx_comms = rx.community.louvain_communities(g, weight_fn=None, seed=seed, resolution=1.0)
+    rx_comms = rx.community.louvain_communities(g, seed=seed, resolution=1.0)
 
     assert len(nx_comms) == len(rx_comms)
     assert set().union(*nx_comms) == set(range(8))

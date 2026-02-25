@@ -11,14 +11,13 @@
 // limitations under the License.
 // https://arxiv.org/abs/1810.08473
 
+use crate::NumericEdgeWeightResolver;
 use crate::graph::PyGraph;
-use crate::weight_callable;
 use foldhash::{HashMap, HashMapExt};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::RngCore;
-use std::collections::VecDeque;
 
 const UNASSIGNED: usize = usize::MAX;
 const DEFAULT_LEIDEN_ITERATIONS: usize = 2;
@@ -175,10 +174,8 @@ fn leiden_shuffle_in_place(values: &mut [usize], rng: &mut LeidenRng) {
 #[derive(Clone)]
 struct GraphState {
     num_nodes: usize,
-    /// Neighbor -> edge weight (undirected graph stored symmetrically)
-    adj: Vec<HashMap<usize, f64>>,
-    /// Preserves first-seen neighbor order for deterministic tie-breaking.
-    neighbor_order: Vec<Vec<usize>>,
+    /// Sorted adjacency lists: (neighbor, aggregated edge weight).
+    neighbors: Vec<Vec<(usize, f64)>>,
     /// Oriented edge list in insertion order (matches igraph edge ordering semantics).
     edges: Vec<(usize, usize, f64)>,
     /// Outgoing edge ids per node (for undirected graphs this stores the canonical "from" side).
@@ -195,23 +192,40 @@ struct GraphState {
 }
 
 impl GraphState {
-    fn from_pygraph(
-        py: Python,
-        graph: &PyGraph,
-        weight_fn: &Option<Py<PyAny>>,
-        min_weight_filter: Option<f64>,
-    ) -> PyResult<Self> {
+    fn from_pygraph(py: Python, graph: &PyGraph, min_weight_filter: Option<f64>) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
-        let mut adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_nodes];
-        let mut neighbor_order: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
-        let mut edges: Vec<(usize, usize, f64)> = Vec::new();
-        let mut out_edge_ids: Vec<Vec<usize>> = vec![Vec::new(); num_nodes];
-        let node_sizes: Vec<f64> = vec![1.0; num_nodes];
+        let mut adj_capacity: Vec<usize> = vec![0; num_nodes];
+        let mut out_edge_capacity: Vec<usize> = vec![0; num_nodes];
+        for edge in graph.graph.edge_references() {
+            let src = edge.source().index();
+            let dst = edge.target().index();
+            let (u, v) = if src <= dst { (src, dst) } else { (dst, src) };
 
-        let mut node_metadata: Vec<Vec<usize>> = Vec::with_capacity(num_nodes);
-        for i in 0..num_nodes {
-            node_metadata.push(vec![i]);
+            out_edge_capacity[u] += 1;
+            if u == v {
+                // Self-loops are inserted twice in out_edge_ids for LOOPS_TWICE compatibility.
+                out_edge_capacity[u] += 1;
+                adj_capacity[u] += 1;
+            } else {
+                adj_capacity[u] += 1;
+                adj_capacity[v] += 1;
+            }
         }
+
+        let mut adj_map: Vec<HashMap<usize, f64>> = adj_capacity
+            .iter()
+            .copied()
+            .map(HashMap::with_capacity)
+            .collect();
+        let mut edges: Vec<(usize, usize, f64)> = Vec::with_capacity(graph.graph.edge_count());
+        let mut out_edge_ids: Vec<Vec<usize>> = out_edge_capacity
+            .iter()
+            .copied()
+            .map(Vec::with_capacity)
+            .collect();
+        let node_sizes: Vec<f64> = vec![1.0; num_nodes];
+        let node_metadata: Vec<Vec<usize>> = (0..num_nodes).map(|i| vec![i]).collect();
+        let weight_resolver = NumericEdgeWeightResolver::new(1.0);
 
         for edge in graph.graph.edge_references() {
             let src = edge.source().index();
@@ -220,7 +234,7 @@ impl GraphState {
             let (u, v) = if src <= dst { (src, dst) } else { (dst, src) };
             let weight_obj = edge.weight();
 
-            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
+            let weight = weight_resolver.resolve(py, weight_obj);
 
             if let Some(min_w) = min_weight_filter {
                 if weight < min_w {
@@ -234,16 +248,10 @@ impl GraphState {
                 ));
             }
 
-            if !adj[u].contains_key(&v) {
-                neighbor_order[u].push(v);
-            }
-            *adj[u].entry(v).or_insert(0.0) += weight;
+            *adj_map[u].entry(v).or_insert(0.0) += weight;
 
             if u != v {
-                if !adj[v].contains_key(&u) {
-                    neighbor_order[v].push(u);
-                }
-                *adj[v].entry(u).or_insert(0.0) += weight;
+                *adj_map[v].entry(u).or_insert(0.0) += weight;
             }
 
             // Keep each (possibly parallel) edge as a distinct entry to mirror igraph/leidenalg
@@ -257,40 +265,40 @@ impl GraphState {
             }
         }
 
-        // igraph adjacency/incident iterators return neighbors ordered by
-        // neighbor vertex id for undirected graphs.
-        for neighbors in &mut neighbor_order {
-            neighbors.sort_unstable();
-        }
         for edge_ids in &mut out_edge_ids {
             edge_ids.sort_unstable_by_key(|&eid| {
                 let (_, to, _) = edges[eid];
                 (to, eid)
             });
         }
-        let node_degrees: Vec<f64> = (0..num_nodes)
-            .map(|node| {
-                // Sum in deterministic igraph-like neighbor order to avoid
-                // floating accumulation drift on weighted graphs.
-                let mut degree = 0.0;
-                for &neighbor in &neighbor_order[node] {
-                    if let Some(weight) = adj[node].get(&neighbor) {
-                        degree += *weight;
-                    }
+        let mut neighbors: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_nodes];
+        let mut node_degrees = vec![0.0; num_nodes];
+        for node in 0..num_nodes {
+            let mut node_neighbors: Vec<(usize, f64)> = adj_map[node]
+                .iter()
+                .map(|(neighbor, weight)| (*neighbor, *weight))
+                .collect();
+            node_neighbors.sort_unstable_by_key(|&(neighbor, _)| neighbor);
+
+            // Match previous floating-point accumulation order exactly.
+            let mut degree = 0.0;
+            let mut self_loop_weight = 0.0;
+            for &(neighbor, weight) in &node_neighbors {
+                degree += weight;
+                if neighbor == node {
+                    self_loop_weight = weight;
                 }
-                if let Some(self_loop_weight) = adj[node].get(&node) {
-                    degree += *self_loop_weight;
-                }
-                degree
-            })
-            .collect();
+            }
+            degree += self_loop_weight;
+            node_degrees[node] = degree;
+            neighbors[node] = node_neighbors;
+        }
 
         let total_weight = edges.iter().map(|(_, _, w)| 2.0 * *w).sum::<f64>();
 
         Ok(Self {
             num_nodes,
-            adj,
-            neighbor_order,
+            neighbors,
             edges,
             out_edge_ids,
             node_sizes,
@@ -384,8 +392,7 @@ impl GraphState {
             }
         }
 
-        let mut new_adj: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_communities];
-        let mut new_neighbor_order: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
+        let mut new_adj_map: Vec<HashMap<usize, f64>> = vec![HashMap::new(); num_communities];
         let mut new_edges: Vec<(usize, usize, f64)> = Vec::with_capacity(collapsed_edges.len());
         let mut new_out_edge_ids: Vec<Vec<usize>> = vec![Vec::new(); num_communities];
 
@@ -408,52 +415,48 @@ impl GraphState {
                 new_out_edge_ids[from].push(eid);
             }
 
-            if !new_adj[from].contains_key(&to) {
-                new_neighbor_order[from].push(to);
-            }
-            *new_adj[from].entry(to).or_insert(0.0) += weight;
+            *new_adj_map[from].entry(to).or_insert(0.0) += weight;
 
             if from != to {
-                if !new_adj[to].contains_key(&from) {
-                    new_neighbor_order[to].push(from);
-                }
-                *new_adj[to].entry(from).or_insert(0.0) += weight;
+                *new_adj_map[to].entry(from).or_insert(0.0) += weight;
             }
         }
 
-        for neighbors in &mut new_neighbor_order {
-            neighbors.sort_unstable();
-        }
         for edge_ids in &mut new_out_edge_ids {
             edge_ids.sort_unstable_by_key(|&eid| {
                 let (_, to, _) = new_edges[eid];
                 (to, eid)
             });
         }
-        let node_degrees: Vec<f64> = (0..num_communities)
-            .map(|node| {
-                // Sum in deterministic igraph-like neighbor order to avoid
-                // floating accumulation drift on weighted graphs.
-                let mut degree = 0.0;
-                for &neighbor in &new_neighbor_order[node] {
-                    if let Some(weight) = new_adj[node].get(&neighbor) {
-                        degree += *weight;
-                    }
+        let mut new_neighbors: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_communities];
+        let mut node_degrees = vec![0.0; num_communities];
+        for node in 0..num_communities {
+            let mut node_neighbors: Vec<(usize, f64)> = new_adj_map[node]
+                .iter()
+                .map(|(neighbor, weight)| (*neighbor, *weight))
+                .collect();
+            node_neighbors.sort_unstable_by_key(|&(neighbor, _)| neighbor);
+
+            // Match previous floating-point accumulation order exactly.
+            let mut degree = 0.0;
+            let mut self_loop_weight = 0.0;
+            for &(neighbor, weight) in &node_neighbors {
+                degree += weight;
+                if neighbor == node {
+                    self_loop_weight = weight;
                 }
-                if let Some(self_loop_weight) = new_adj[node].get(&node) {
-                    degree += *self_loop_weight;
-                }
-                degree
-            })
-            .collect();
+            }
+            degree += self_loop_weight;
+            node_degrees[node] = degree;
+            new_neighbors[node] = node_neighbors;
+        }
 
         let total_weight = new_edges.iter().map(|(_, _, w)| 2.0 * *w).sum::<f64>();
 
         (
             Self {
                 num_nodes: num_communities,
-                adj: new_adj,
-                neighbor_order: new_neighbor_order,
+                neighbors: new_neighbors,
                 edges: new_edges,
                 out_edge_ids: new_out_edge_ids,
                 node_sizes: new_node_sizes,
@@ -466,21 +469,12 @@ impl GraphState {
     }
 }
 
-fn ensure_comm_capacity(
-    comm: usize,
-    comm_sizes: &mut Vec<usize>,
-    comm_degrees: &mut Vec<f64>,
-    comm_added: &mut Vec<bool>,
-    weight_to_comm: &mut Vec<f64>,
-) {
-    if comm < comm_sizes.len() {
-        return;
-    }
-    let new_len = comm + 1;
-    comm_sizes.resize(new_len, 0);
-    comm_degrees.resize(new_len, 0.0);
-    comm_added.resize(new_len, false);
-    weight_to_comm.resize(new_len, 0.0);
+#[inline]
+fn neighbor_weight(neighbors: &[(usize, f64)], target: usize) -> Option<f64> {
+    neighbors
+        .binary_search_by_key(&target, |&(neighbor, _)| neighbor)
+        .ok()
+        .map(|idx| neighbors[idx].1)
 }
 
 fn renumber_membership_by_size(membership: &mut [usize], node_sizes: Option<&[f64]>) {
@@ -555,31 +549,37 @@ fn count_communities(membership: &[usize]) -> usize {
     count
 }
 
-fn canonical_partition_signature(membership: &[usize]) -> Vec<Vec<usize>> {
+fn canonical_partition_signature(membership: &[usize]) -> Vec<usize> {
+    if membership.is_empty() {
+        return Vec::new();
+    }
+
     let max_comm = membership
         .iter()
         .copied()
         .filter(|&c| c != UNASSIGNED)
         .max()
         .unwrap_or(0);
-    let mut comm_map: Vec<Vec<usize>> = vec![Vec::new(); max_comm + 1];
-    let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
+    let mut comm_remap = vec![UNASSIGNED; max_comm + 1];
+    let mut next_comm = 0usize;
+    let mut signature = vec![UNASSIGNED; membership.len()];
+
+    // Canonicalize labels by first occurrence so identical partitions compare equal.
     for (node, &comm) in membership.iter().enumerate() {
-        if comm != UNASSIGNED {
-            if comm_map[comm].is_empty() {
-                touched_comms.push(comm);
-            }
-            comm_map[comm].push(node);
+        if comm == UNASSIGNED {
+            continue;
         }
+        let mapped = if comm_remap[comm] == UNASSIGNED {
+            let new_comm = next_comm;
+            comm_remap[comm] = new_comm;
+            next_comm += 1;
+            new_comm
+        } else {
+            comm_remap[comm]
+        };
+        signature[node] = mapped;
     }
 
-    let mut signature: Vec<Vec<usize>> = Vec::with_capacity(touched_comms.len());
-    for comm_id in touched_comms {
-        let mut comm = std::mem::take(&mut comm_map[comm_id]);
-        comm.sort_unstable();
-        signature.push(comm);
-    }
-    signature.sort_unstable();
     signature
 }
 
@@ -632,10 +632,7 @@ fn move_nodes(
         if comm == UNASSIGNED {
             continue;
         }
-        if comm >= comm_sizes.len() {
-            comm_sizes.resize(comm + 1, 0);
-            comm_degrees.resize(comm + 1, 0.0);
-        }
+        debug_assert!(comm < comm_sizes.len());
         comm_sizes[comm] += 1;
         comm_degrees[comm] += graph.node_degrees[node];
     }
@@ -645,6 +642,7 @@ fn move_nodes(
         .enumerate()
         .filter_map(|(comm, &size)| if size == 0 { Some(comm) } else { None })
         .collect();
+    let mut comm_is_empty: Vec<bool> = comm_sizes.iter().map(|&size| size == 0).collect();
 
     let mut comm_added = vec![false; comm_sizes.len()];
     let mut weight_to_comm = vec![0.0; comm_sizes.len()];
@@ -652,48 +650,64 @@ fn move_nodes(
 
     let mut nodes: Vec<usize> = (0..graph.num_nodes).collect();
     leiden_shuffle_in_place(&mut nodes, rng);
-    let mut vertex_order: VecDeque<usize> = nodes.into();
+    let mut vertex_order: Vec<usize> = nodes;
+    let mut vertex_cursor = 0usize;
     let mut is_node_stable = vec![false; graph.num_nodes];
+    let mut override_weight_cache: Option<Vec<Option<Vec<f64>>>> =
+        adjacency_override.map(|_| (0..graph.num_nodes).map(|_| None).collect());
 
     let m2 = graph.total_weight;
     let mut moved_any = false;
 
-    while let Some(node) = vertex_order.pop_front() {
+    while vertex_cursor < vertex_order.len() {
+        let node = vertex_order[vertex_cursor];
+        vertex_cursor += 1;
+
         let current_comm = membership[node];
         if current_comm == UNASSIGNED {
             continue;
         }
-
-        ensure_comm_capacity(
-            current_comm,
-            &mut comm_sizes,
-            &mut comm_degrees,
-            &mut comm_added,
-            &mut weight_to_comm,
-        );
+        debug_assert!(current_comm < comm_sizes.len());
 
         touched_comms.clear();
+        let node_neighbors = &graph.neighbors[node];
 
         if let Some(adj) = adjacency_override {
             if node < adj.len() {
-                for &neighbor in &adj[node] {
+                if let Some(cache_rows) = override_weight_cache.as_mut() {
+                    if cache_rows[node].is_none() {
+                        let mut weights: Vec<f64> = Vec::with_capacity(adj[node].len());
+                        for &neighbor in &adj[node] {
+                            if neighbor == node {
+                                weights.push(0.0);
+                                continue;
+                            }
+                            weights.push(neighbor_weight(node_neighbors, neighbor).unwrap_or(0.0));
+                        }
+                        cache_rows[node] = Some(weights);
+                    }
+                }
+
+                let cached_weights = override_weight_cache
+                    .as_ref()
+                    .and_then(|rows| rows[node].as_ref());
+
+                for (idx, &neighbor) in adj[node].iter().enumerate() {
                     if neighbor == node {
                         continue;
                     }
-                    let Some(&weight) = graph.adj[node].get(&neighbor) else {
+                    let Some(weight) = cached_weights.and_then(|weights| weights.get(idx).copied())
+                    else {
                         continue;
                     };
+                    if weight == 0.0 {
+                        continue;
+                    }
                     let neighbor_comm = membership[neighbor];
                     if neighbor_comm == UNASSIGNED {
                         continue;
                     }
-                    ensure_comm_capacity(
-                        neighbor_comm,
-                        &mut comm_sizes,
-                        &mut comm_degrees,
-                        &mut comm_added,
-                        &mut weight_to_comm,
-                    );
+                    debug_assert!(neighbor_comm < comm_sizes.len());
                     if !comm_added[neighbor_comm] {
                         comm_added[neighbor_comm] = true;
                         touched_comms.push(neighbor_comm);
@@ -702,24 +716,15 @@ fn move_nodes(
                 }
             }
         } else {
-            for &neighbor in &graph.neighbor_order[node] {
+            for &(neighbor, weight) in node_neighbors {
                 if neighbor == node {
                     continue;
                 }
-                let Some(&weight) = graph.adj[node].get(&neighbor) else {
-                    continue;
-                };
                 let neighbor_comm = membership[neighbor];
                 if neighbor_comm == UNASSIGNED {
                     continue;
                 }
-                ensure_comm_capacity(
-                    neighbor_comm,
-                    &mut comm_sizes,
-                    &mut comm_degrees,
-                    &mut comm_added,
-                    &mut weight_to_comm,
-                );
+                debug_assert!(neighbor_comm < comm_sizes.len());
                 if !comm_added[neighbor_comm] {
                     comm_added[neighbor_comm] = true;
                     touched_comms.push(neighbor_comm);
@@ -752,12 +757,20 @@ fn move_nodes(
         }
 
         if comm_sizes[current_comm] > 1 {
+            while let Some(&tail_comm) = empty_comms.last() {
+                if tail_comm < comm_is_empty.len() && comm_is_empty[tail_comm] {
+                    break;
+                }
+                empty_comms.pop();
+            }
+
             if empty_comms.is_empty() {
                 let new_empty = comm_sizes.len();
                 comm_sizes.push(0);
                 comm_degrees.push(0.0);
                 comm_added.push(false);
                 weight_to_comm.push(0.0);
+                comm_is_empty.push(true);
                 empty_comms.push(new_empty);
             }
             if let Some(&empty_comm) = empty_comms.last() {
@@ -787,25 +800,28 @@ fn move_nodes(
             comm_sizes[current_comm] -= 1;
             comm_degrees[current_comm] -= node_degree;
             if comm_sizes[current_comm] == 0 {
-                empty_comms.push(current_comm);
+                debug_assert!(current_comm < comm_is_empty.len());
+                if !comm_is_empty[current_comm] {
+                    comm_is_empty[current_comm] = true;
+                    empty_comms.push(current_comm);
+                }
             }
 
             membership[node] = best_comm;
+            debug_assert!(best_comm < comm_is_empty.len());
             comm_sizes[best_comm] += 1;
             comm_degrees[best_comm] += node_degree;
 
             if new_comm_was_empty {
-                if let Some(pos) = empty_comms.iter().rposition(|&c| c == best_comm) {
-                    empty_comms.remove(pos);
-                }
+                comm_is_empty[best_comm] = false;
             }
 
-            for &neighbor in &graph.neighbor_order[node] {
+            for &(neighbor, _) in &graph.neighbors[node] {
                 if neighbor == node {
                     continue;
                 }
                 if is_node_stable[neighbor] && membership[neighbor] != best_comm {
-                    vertex_order.push_back(neighbor);
+                    vertex_order.push(neighbor);
                     is_node_stable[neighbor] = false;
                 }
             }
@@ -842,10 +858,7 @@ fn merge_nodes_constrained(
         if comm == UNASSIGNED {
             continue;
         }
-        if comm >= sub_sizes.len() {
-            sub_sizes.resize(comm + 1, 0);
-            sub_degrees.resize(comm + 1, 0.0);
-        }
+        debug_assert!(comm < sub_sizes.len());
         sub_sizes[comm] += 1;
         sub_degrees[comm] += graph.node_degrees[node];
     }
@@ -864,16 +877,14 @@ fn merge_nodes_constrained(
         if current_sub == UNASSIGNED {
             continue;
         }
-        if current_sub >= sub_sizes.len() {
-            continue;
-        }
+        debug_assert!(current_sub < sub_sizes.len());
         if sub_sizes[current_sub] != 1 {
             continue;
         }
 
         touched_comms.clear();
 
-        for &neighbor in &graph.neighbor_order[node] {
+        for &(neighbor, weight) in &graph.neighbors[node] {
             if neighbor == node {
                 continue;
             }
@@ -881,21 +892,11 @@ fn merge_nodes_constrained(
                 continue;
             }
 
-            let Some(&weight) = graph.adj[node].get(&neighbor) else {
-                continue;
-            };
-
             let neighbor_sub = sub_membership[neighbor];
             if neighbor_sub == UNASSIGNED {
                 continue;
             }
-
-            if neighbor_sub >= sub_sizes.len() {
-                sub_sizes.resize(neighbor_sub + 1, 0);
-                sub_degrees.resize(neighbor_sub + 1, 0.0);
-                comm_added.resize(neighbor_sub + 1, false);
-                weight_to_comm.resize(neighbor_sub + 1, 0.0);
-            }
+            debug_assert!(neighbor_sub < sub_sizes.len());
 
             if !comm_added[neighbor_sub] {
                 comm_added[neighbor_sub] = true;
@@ -1022,13 +1023,12 @@ fn optimise_once(
 }
 
 #[pyfunction(
-    signature = (graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None),
-    text_signature = "(graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None)"
+    signature = (graph, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None),
+    text_signature = "(graph, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None)"
 )]
 pub fn leiden_communities(
     py: Python,
     graph: Py<PyAny>,
-    weight_fn: Option<Py<PyAny>>,
     resolution: f64,
     seed: Option<u64>,
     min_weight: Option<f64>,
@@ -1070,7 +1070,7 @@ pub fn leiden_communities(
         None
     };
 
-    let original_graph_state = GraphState::from_pygraph(py, &graph_ref, &weight_fn, min_weight)?;
+    let original_graph_state = GraphState::from_pygraph(py, &graph_ref, min_weight)?;
     let original_num_nodes = original_graph_state.num_nodes;
 
     let mut membership_original: Vec<usize> = (0..original_num_nodes).collect();
@@ -1138,8 +1138,7 @@ pub fn leiden_communities(
 
     let mut result = Vec::with_capacity(touched_comms.len());
     for comm_id in touched_comms {
-        let mut comm_nodes = std::mem::take(&mut comm_map[comm_id]);
-        comm_nodes.sort_unstable();
+        let comm_nodes = std::mem::take(&mut comm_map[comm_id]);
         if !comm_nodes.is_empty() {
             result.push(comm_nodes);
         }

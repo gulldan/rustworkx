@@ -73,7 +73,8 @@ _TUNABLE_ALGOS_SETUP = [
         "color": RX_LEIDEN_COLOR,
         "runner_name": "run_rx_leiden_algorithm",
         "is_rx": True,
-        "needs_adjacency": True,  # Use NX adjacency order for closer cross-library parity
+        # Keep Leiden aligned with seeded leidenalg/cdlib reference path.
+        "needs_adjacency": False,
     },
 ]
 for algo_setup in _TUNABLE_ALGOS_SETUP:

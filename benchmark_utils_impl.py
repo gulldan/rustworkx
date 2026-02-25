@@ -1,25 +1,19 @@
-"""Compatibility facade for benchmark utility helpers.
+"""Implementation aggregator for benchmark utility helpers."""
 
-Implementation moved to ``benchmark_utils_impl.py`` to keep this public module compact.
-"""
-
-from benchmark_utils_impl import (
-    _extract_label_mapping,
+from benchmark_utils_format import format_bool, format_memory, format_time, measure_memory
+from benchmark_utils_graph import convert_nx_to_rx, rx_modularity_calculation
+from benchmark_utils_internal import (
     _global_triangles_cache,
-    calculate_cluster_matching_metrics,
     calculate_custom_significance,
     calculate_internal_metrics,
-    calculate_overall_score,
+)
+from benchmark_utils_labels import (
+    _extract_label_mapping,
+    calculate_cluster_matching_metrics,
     calculate_purity,
     compare_with_true_labels,
-    convert_nx_to_rx,
-    format_bool,
-    format_memory,
-    format_time,
-    measure_memory,
-    normalize_metric_value,
-    rx_modularity_calculation,
 )
+from benchmark_utils_scoring import calculate_overall_score, normalize_metric_value
 
 __all__ = [
     "convert_nx_to_rx",

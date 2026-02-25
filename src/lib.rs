@@ -256,6 +256,34 @@ where
     })
 }
 
+pub(crate) struct NumericEdgeWeightResolver {
+    default_weight: f64,
+}
+
+impl NumericEdgeWeightResolver {
+    #[inline]
+    pub(crate) fn new(default_weight: f64) -> Self {
+        Self { default_weight }
+    }
+
+    #[inline]
+    pub(crate) fn resolve(&self, py: Python, weight_obj: &Py<PyAny>) -> f64 {
+        let weight_bound = weight_obj.bind(py);
+
+        if let Ok(weight) = weight_bound.extract::<f64>() {
+            return weight;
+        }
+
+        if let Ok(weight_attr) = weight_bound.get_item("weight") {
+            if let Ok(weight) = weight_attr.extract::<f64>() {
+                return weight;
+            }
+        }
+
+        self.default_weight
+    }
+}
+
 fn weight_callable<'p, T>(
     py: Python<'p>,
     weight_fn: &'p Option<Py<PyAny>>,

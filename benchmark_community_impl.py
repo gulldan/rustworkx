@@ -1,51 +1,6 @@
-#!/usr/bin/env python3
-# Licensed under the Apache License, Version 2.0 (the "License"); you may
-# not use this file except in compliance with the License. You may obtain
-# a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-# License for the specific language governing permissions and limitations
-# under the License.
+"""Implementation aggregator for community benchmark CLI and helpers."""
 
-"""Compatibility facade for the community benchmark CLI and helpers.
-
-Implementation moved to ``benchmark_community_impl.py`` to keep this public module compact.
-"""
-
-from benchmark_community_impl import (
-    _algorithm_matches_filters,
-    _calculate_and_store_exact_match_metrics,
-    _calculate_and_store_metrics_for_run,
-    _ensure_default_graph_weights,
-    _exact_match_relevant_prefixes,
-    _exact_partition_match,
-    _find_previous_results_table_path,
-    _format_ratio_change,
-    _generate_exact_match_markdown_summary,
-    _generate_run_to_run_markdown_summary,
-    _get_partition_if_ran,
-    _get_runner_function_by_name,
-    _matches_any_filter,
-    _normalize_ground_truth_labels,
-    _parse_markdown_results_table,
-    _parse_memory_cell_to_mb,
-    _parse_time_cell_to_seconds,
-    _partition_signature,
-    _prepare_cdlib_graph_and_adjacency,
-    _process_communities,
-    _register_skipped_algorithm_result,
-    _run_single_algorithm_config,
-    _set_exact_match_metric,
-    _split_markdown_row,
-    _strip_html,
-    initialize_results_dict,
-    main,
-    run_benchmark,
-    run_benchmark_on_dataset,
+from benchmark_community_algorithms import (
     run_cdlib_algorithm,
     run_leidenalg_algorithm,
     run_nx_algorithm,
@@ -59,6 +14,37 @@ from benchmark_community_impl import (
     run_rx_lpa_algorithm,
     run_rx_lpa_strongest_algorithm,
 )
+from benchmark_community_execution import (
+    _calculate_and_store_exact_match_metrics,
+    _calculate_and_store_metrics_for_run,
+    _exact_partition_match,
+    _get_partition_if_ran,
+    _partition_signature,
+    _process_communities,
+    _register_skipped_algorithm_result,
+    _run_single_algorithm_config,
+    _set_exact_match_metric,
+    initialize_results_dict,
+)
+from benchmark_community_helpers import (
+    _algorithm_matches_filters,
+    _ensure_default_graph_weights,
+    _exact_match_relevant_prefixes,
+    _find_previous_results_table_path,
+    _format_ratio_change,
+    _generate_exact_match_markdown_summary,
+    _generate_run_to_run_markdown_summary,
+    _get_runner_function_by_name,
+    _matches_any_filter,
+    _normalize_ground_truth_labels,
+    _parse_markdown_results_table,
+    _parse_memory_cell_to_mb,
+    _parse_time_cell_to_seconds,
+    _prepare_cdlib_graph_and_adjacency,
+    _split_markdown_row,
+    _strip_html,
+)
+from benchmark_community_orchestrator import main, run_benchmark, run_benchmark_on_dataset
 
 __all__ = [
     "_get_runner_function_by_name",
@@ -103,6 +89,3 @@ __all__ = [
     "run_benchmark_on_dataset",
     "main",
 ]
-
-if __name__ == "__main__":
-    main()

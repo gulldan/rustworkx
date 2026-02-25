@@ -19,9 +19,9 @@ use pyo3::prelude::*;
 use rand::prelude::*;
 use rand_pcg::Pcg64;
 
+use crate::NumericEdgeWeightResolver;
 use crate::community::common::PythonCompatRng;
 use crate::graph::PyGraph;
-use crate::weight_callable;
 
 // Type alias for RNG used in Louvain algorithm
 type LouvainRng = Pcg64;
@@ -34,10 +34,8 @@ type LouvainRng = Pcg64;
 struct GraphState {
     /// Number of nodes in the graph
     num_nodes: usize,
-    /// Adjacency list: node -> neighbors with weights
-    adj: Vec<HashMap<usize, f64>>,
-    /// Neighbor iteration order for each node (used for deterministic tie-breaking)
-    neighbor_order: Vec<Vec<usize>>,
+    /// Adjacency list in deterministic insertion order: (neighbor, weight)
+    neighbors: Vec<Vec<(usize, f64)>>,
     /// Precomputed weighted degree for each node
     node_degrees: Vec<f64>,
     /// Total weight of the graph (sum of all edge weights)
@@ -52,22 +50,41 @@ impl GraphState {
     /// # Arguments
     /// * `py` - Python interpreter context
     /// * `graph` - The input graph
-    /// * `weight_fn` - Optional callable Python function to extract edge weights
+    /// * Edge weights are read directly from edge payloads when numeric. If
+    ///   payloads are mappings with a `"weight"` key, that value is used.
+    ///   Otherwise a default weight of 1.0 is used.
     ///
     /// # Returns
     /// * GraphState - The initialized graph state for Louvain algorithm
     /// * PyErr - If edge weights are not positive or other errors occur
-    fn from_pygraph(py: Python, graph: &PyGraph, weight_fn: &Option<Py<PyAny>>) -> PyResult<Self> {
+    fn from_pygraph(py: Python, graph: &PyGraph) -> PyResult<Self> {
         let num_nodes = graph.graph.node_count();
-        let mut adj = vec![HashMap::new(); num_nodes];
-        let mut neighbor_order = vec![Vec::new(); num_nodes];
+        let mut neighbor_capacity: Vec<usize> = vec![0; num_nodes];
+        for edge in graph.graph.edge_references() {
+            let u = edge.source().index();
+            let v = edge.target().index();
+            if u == v {
+                neighbor_capacity[u] += 1;
+            } else {
+                neighbor_capacity[u] += 1;
+                neighbor_capacity[v] += 1;
+            }
+        }
+        let mut neighbors: Vec<Vec<(usize, f64)>> = neighbor_capacity
+            .iter()
+            .copied()
+            .map(Vec::with_capacity)
+            .collect();
+        let mut neighbor_pos: Vec<HashMap<usize, usize>> = neighbor_capacity
+            .iter()
+            .copied()
+            .map(HashMap::with_capacity)
+            .collect();
         let mut total_weight = 0.0;
+        let weight_resolver = NumericEdgeWeightResolver::new(1.0);
 
         // Initialize node metadata with singleton sets
-        let mut node_metadata: Vec<Vec<usize>> = Vec::with_capacity(num_nodes);
-        for i in 0..num_nodes {
-            node_metadata.push(vec![i]);
-        }
+        let node_metadata: Vec<Vec<usize>> = (0..num_nodes).map(|i| vec![i]).collect();
 
         // Convert PyGraph to adjacency list format
         for edge in graph.graph.edge_references() {
@@ -75,7 +92,7 @@ impl GraphState {
             let v = edge.target().index();
             let weight_obj = edge.weight();
 
-            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
+            let weight = weight_resolver.resolve(py, weight_obj);
 
             if weight <= 0.0 {
                 return Err(PyValueError::new_err(
@@ -84,31 +101,42 @@ impl GraphState {
             }
             if u == v {
                 // Self-loops are not counted in the total weight
-                if !adj[u].contains_key(&u) {
-                    neighbor_order[u].push(u);
+                if let Some(&idx) = neighbor_pos[u].get(&u) {
+                    neighbors[u][idx].1 += weight;
+                } else {
+                    let idx = neighbors[u].len();
+                    neighbors[u].push((u, weight));
+                    neighbor_pos[u].insert(u, idx);
                 }
-                *adj[u].entry(u).or_insert(0.0) += weight;
                 total_weight += 2.0 * weight;
             } else {
-                if !adj[u].contains_key(&v) {
-                    neighbor_order[u].push(v);
+                if let Some(&idx) = neighbor_pos[u].get(&v) {
+                    neighbors[u][idx].1 += weight;
+                } else {
+                    let idx = neighbors[u].len();
+                    neighbors[u].push((v, weight));
+                    neighbor_pos[u].insert(v, idx);
                 }
-                *adj[u].entry(v).or_insert(0.0) += weight;
-                if !adj[v].contains_key(&u) {
-                    neighbor_order[v].push(u);
+                if let Some(&idx) = neighbor_pos[v].get(&u) {
+                    neighbors[v][idx].1 += weight;
+                } else {
+                    let idx = neighbors[v].len();
+                    neighbors[v].push((u, weight));
+                    neighbor_pos[v].insert(u, idx);
                 }
-                *adj[v].entry(u).or_insert(0.0) += weight; // Undirected graph
                 total_weight += 2.0 * weight; // 2m = sum of all degrees
             }
         }
 
-        let node_degrees: Vec<f64> = adj
+        let node_degrees: Vec<f64> = neighbors
             .iter()
             .enumerate()
             .map(|(node, neighbors)| {
-                let mut degree = neighbors.values().sum::<f64>();
+                let mut degree = neighbors.iter().map(|(_, weight)| *weight).sum::<f64>();
                 // In undirected graphs, self-loop contributes twice to degree.
-                if let Some(self_loop_weight) = neighbors.get(&node) {
+                if let Some((_, self_loop_weight)) =
+                    neighbors.iter().find(|&&(neighbor, _)| neighbor == node)
+                {
                     degree += *self_loop_weight;
                 }
                 degree
@@ -117,8 +145,7 @@ impl GraphState {
 
         Ok(GraphState {
             num_nodes,
-            adj,
-            neighbor_order,
+            neighbors,
             node_degrees,
             total_weight,
             node_metadata,
@@ -149,8 +176,9 @@ impl GraphState {
         }
 
         // Initialize new graph
-        let mut new_adj = vec![HashMap::new(); num_communities];
-        let mut new_neighbor_order = vec![Vec::new(); num_communities];
+        let mut new_neighbors: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_communities];
+        let mut new_neighbor_pos: Vec<HashMap<usize, usize>> =
+            vec![HashMap::new(); num_communities];
         let mut new_node_metadata = vec![Vec::new(); num_communities];
 
         // Aggregate node metadata into community super-nodes.
@@ -166,43 +194,49 @@ impl GraphState {
             let comm = node_to_comm[node];
             let new_node = comm_to_new_id[comm];
 
-            for &neighbor in &self.neighbor_order[node] {
+            for &(neighbor, weight) in &self.neighbors[node] {
                 if node > neighbor {
                     continue;
                 }
-
-                let Some(&weight) = self.adj[node].get(&neighbor) else {
-                    continue;
-                };
                 let neighbor_comm = node_to_comm[neighbor];
                 let new_neighbor = comm_to_new_id[neighbor_comm];
 
                 if new_node == new_neighbor {
-                    if !new_adj[new_node].contains_key(&new_node) {
-                        new_neighbor_order[new_node].push(new_node);
+                    if let Some(&idx) = new_neighbor_pos[new_node].get(&new_node) {
+                        new_neighbors[new_node][idx].1 += weight;
+                    } else {
+                        let idx = new_neighbors[new_node].len();
+                        new_neighbors[new_node].push((new_node, weight));
+                        new_neighbor_pos[new_node].insert(new_node, idx);
                     }
-                    *new_adj[new_node].entry(new_node).or_insert(0.0) += weight;
                 } else {
-                    if !new_adj[new_node].contains_key(&new_neighbor) {
-                        new_neighbor_order[new_node].push(new_neighbor);
+                    if let Some(&idx) = new_neighbor_pos[new_node].get(&new_neighbor) {
+                        new_neighbors[new_node][idx].1 += weight;
+                    } else {
+                        let idx = new_neighbors[new_node].len();
+                        new_neighbors[new_node].push((new_neighbor, weight));
+                        new_neighbor_pos[new_node].insert(new_neighbor, idx);
                     }
-                    *new_adj[new_node].entry(new_neighbor).or_insert(0.0) += weight;
-
-                    if !new_adj[new_neighbor].contains_key(&new_node) {
-                        new_neighbor_order[new_neighbor].push(new_node);
+                    if let Some(&idx) = new_neighbor_pos[new_neighbor].get(&new_node) {
+                        new_neighbors[new_neighbor][idx].1 += weight;
+                    } else {
+                        let idx = new_neighbors[new_neighbor].len();
+                        new_neighbors[new_neighbor].push((new_node, weight));
+                        new_neighbor_pos[new_neighbor].insert(new_node, idx);
                     }
-                    *new_adj[new_neighbor].entry(new_node).or_insert(0.0) += weight;
                 }
             }
         }
 
         // The total weight remains the same after aggregation.
-        let node_degrees: Vec<f64> = new_adj
+        let node_degrees: Vec<f64> = new_neighbors
             .iter()
             .enumerate()
             .map(|(node, neighbors)| {
-                let mut degree = neighbors.values().sum::<f64>();
-                if let Some(self_loop_weight) = neighbors.get(&node) {
+                let mut degree = neighbors.iter().map(|(_, weight)| *weight).sum::<f64>();
+                if let Some((_, self_loop_weight)) =
+                    neighbors.iter().find(|&&(neighbor, _)| neighbor == node)
+                {
                     degree += *self_loop_weight;
                 }
                 degree
@@ -211,8 +245,7 @@ impl GraphState {
 
         GraphState {
             num_nodes: num_communities,
-            adj: new_adj,
-            neighbor_order: new_neighbor_order,
+            neighbors: new_neighbors,
             node_degrees,
             total_weight: self.total_weight,
             node_metadata: new_node_metadata,
@@ -255,7 +288,10 @@ fn run_one_level(
     // Reusable per-node buffers for neighbor community accumulation.
     let mut neighbor_weights = vec![0.0; n];
     let mut touched_comms: Vec<usize> = Vec::with_capacity(64);
-    let mut comm_order: Vec<usize> = Vec::with_capacity(64);
+    let mut nx_weight_cache: Option<Vec<Option<Vec<f64>>>> =
+        nx_adjacency.map(|_| (0..n).map(|_| None).collect());
+    let mut nx_neighbor_lookup_cache: Option<Vec<Option<HashMap<usize, f64>>>> =
+        nx_adjacency.map(|_| (0..n).map(|_| None).collect());
 
     // Continue until no more moves improve modularity or max iterations reached
     loop {
@@ -273,35 +309,73 @@ fn run_one_level(
                 neighbor_weights[comm] = 0.0;
             }
             touched_comms.clear();
-            comm_order.clear();
 
             // Calculate weights to neighboring communities with insertion-order tracking.
             if let Some(nx_adj) = nx_adjacency {
-                for &neighbor in &nx_adj[node] {
-                    if node == neighbor {
-                        continue;
+                if node < nx_adj.len() {
+                    if let Some(lookup_rows) = nx_neighbor_lookup_cache.as_mut() {
+                        if lookup_rows[node].is_none() {
+                            let mut neighbor_lookup: HashMap<usize, f64> =
+                                HashMap::with_capacity(graph.neighbors[node].len());
+                            for &(neighbor, weight) in &graph.neighbors[node] {
+                                neighbor_lookup.insert(neighbor, weight);
+                            }
+                            lookup_rows[node] = Some(neighbor_lookup);
+                        }
                     }
-                    if let Some(&weight) = graph.adj[node].get(&neighbor) {
+
+                    if let Some(cache_rows) = nx_weight_cache.as_mut() {
+                        if cache_rows[node].is_none() {
+                            let mut weights: Vec<f64> = Vec::with_capacity(nx_adj[node].len());
+                            let neighbor_lookup = nx_neighbor_lookup_cache
+                                .as_ref()
+                                .and_then(|rows| rows[node].as_ref());
+                            for &neighbor in &nx_adj[node] {
+                                if node == neighbor {
+                                    weights.push(0.0);
+                                    continue;
+                                }
+                                weights.push(
+                                    neighbor_lookup
+                                        .and_then(|lookup| lookup.get(&neighbor).copied())
+                                        .unwrap_or(0.0),
+                                );
+                            }
+                            cache_rows[node] = Some(weights);
+                        }
+                    }
+
+                    let cached_weights = nx_weight_cache
+                        .as_ref()
+                        .and_then(|rows| rows[node].as_ref());
+
+                    for (idx, &neighbor) in nx_adj[node].iter().enumerate() {
+                        if node == neighbor {
+                            continue;
+                        }
+                        let Some(weight) =
+                            cached_weights.and_then(|weights| weights.get(idx).copied())
+                        else {
+                            continue;
+                        };
+                        if weight == 0.0 {
+                            continue;
+                        }
                         let comm = node_to_comm[neighbor];
                         if neighbor_weights[comm] == 0.0 {
                             touched_comms.push(comm);
-                            comm_order.push(comm);
                         }
                         neighbor_weights[comm] += weight;
                     }
                 }
             } else {
-                for &neighbor in &graph.neighbor_order[node] {
+                for &(neighbor, weight) in &graph.neighbors[node] {
                     if node == neighbor {
                         continue;
                     }
-                    let Some(&weight) = graph.adj[node].get(&neighbor) else {
-                        continue;
-                    };
                     let comm = node_to_comm[neighbor];
                     if neighbor_weights[comm] == 0.0 {
                         touched_comms.push(comm);
-                        comm_order.push(comm);
                     }
                     neighbor_weights[comm] += weight;
                 }
@@ -322,7 +396,7 @@ fn run_one_level(
             // Iterate over neighbor communities in insertion order.
             // When nx_adjacency is provided, this follows NetworkX neighbor ordering
             // for tie-breaking on the first (non-aggregated) level.
-            for &candidate_comm in &comm_order {
+            for &candidate_comm in &touched_comms {
                 let weight_to_comm = neighbor_weights[candidate_comm];
 
                 // Get community degrees before adding node i
@@ -365,7 +439,6 @@ fn run_one_level(
 /// # Arguments
 /// * `py` - Python interpreter context
 /// * `graph` - The input graph
-/// * `weight_fn` - Optional callable to extract edge weights
 /// * `resolution` - Resolution parameter for modularity
 /// * `threshold` - Threshold for modularity improvement to continue
 /// * `seed` - Optional seed for random number generation
@@ -376,7 +449,6 @@ fn run_one_level(
 fn run_louvain(
     py: Python,
     graph: &PyGraph,
-    weight_fn: &Option<Py<PyAny>>,
     resolution: f64,
     threshold: f64,
     seed: Option<u64>,
@@ -397,7 +469,7 @@ fn run_louvain(
     };
 
     // Convert PyGraph to our internal format
-    let mut graph_state = GraphState::from_pygraph(py, graph, weight_fn)?;
+    let mut graph_state = GraphState::from_pygraph(py, graph)?;
 
     // Start with each node in its own community
     let mut node_to_comm: Vec<usize> = (0..graph_state.num_nodes).collect();
@@ -411,6 +483,7 @@ fn run_louvain(
     // Main loop: continue until no more improvement
     let mut improvement = true;
     let mut first_level = true;
+    let mut node_order: Vec<usize> = Vec::new();
     while improvement {
         // Run one level of the algorithm
         // Only use NX adjacency for the first level (before graph aggregation)
@@ -421,15 +494,13 @@ fn run_louvain(
         };
         first_level = false;
 
-        let node_order = if let Some(py_rng) = py_compat_shuffle_rng.as_mut() {
-            let mut nodes: Vec<usize> = (0..graph_state.num_nodes).collect();
-            py_rng.shuffle(&mut nodes);
-            nodes
+        node_order.clear();
+        node_order.extend(0..graph_state.num_nodes);
+        if let Some(py_rng) = py_compat_shuffle_rng.as_mut() {
+            py_rng.shuffle(&mut node_order);
         } else {
-            let mut nodes: Vec<usize> = (0..graph_state.num_nodes).collect();
-            nodes.shuffle(&mut rng);
-            nodes
-        };
+            node_order.shuffle(&mut rng);
+        }
 
         improvement = run_one_level(
             &graph_state,
@@ -553,6 +624,25 @@ fn merge_small_communities(
         return kept;
     }
 
+    let mut max_node_idx = 0usize;
+    for comm in &normal_communities {
+        for &node in comm {
+            max_node_idx = max_node_idx.max(node);
+        }
+    }
+    for comm in &small_communities {
+        for &node in comm {
+            max_node_idx = max_node_idx.max(node);
+        }
+    }
+
+    let mut node_to_comm: Vec<usize> = vec![usize::MAX; max_node_idx + 1];
+    for (comm_idx, comm) in normal_communities.iter().enumerate() {
+        for &node in comm {
+            node_to_comm[node] = comm_idx;
+        }
+    }
+
     // For each small community, find the best larger community to merge with
     for small_comm in small_communities {
         // Count connections to each larger community
@@ -562,12 +652,10 @@ fn merge_small_communities(
             // Find connections from this node to nodes in other communities
             for edge in graph.graph.edges(petgraph::graph::NodeIndex::new(node)) {
                 let neighbor = edge.target().index();
-
-                // Check which community this neighbor belongs to
-                for (comm_idx, comm) in normal_communities.iter().enumerate() {
-                    if comm.contains(&neighbor) {
+                if neighbor < node_to_comm.len() {
+                    let comm_idx = node_to_comm[neighbor];
+                    if comm_idx != usize::MAX {
                         conn_counts[comm_idx] += 1;
-                        break;
                     }
                 }
             }
@@ -585,6 +673,12 @@ fn merge_small_communities(
         }
 
         // Merge with the best community (or the largest if no connections found)
+        for &node in &small_comm {
+            if node >= node_to_comm.len() {
+                node_to_comm.resize(node + 1, usize::MAX);
+            }
+            node_to_comm[node] = best_comm_idx;
+        }
         normal_communities[best_comm_idx].extend(small_comm);
     }
 
@@ -607,8 +701,6 @@ fn merge_small_communities(
 ///
 /// Args:
 ///     graph: The undirected graph (PyGraph) to analyze.
-///     weight_fn: Optional callable that returns the weight of an edge. If None,
-///         edges are considered unweighted (weight=1.0).
 ///     resolution: Resolution parameter. Higher values yield smaller communities.
 ///         Default is 1.0.
 ///     threshold: Minimum improvement in modularity to continue the algorithm.
@@ -629,13 +721,12 @@ fn merge_small_communities(
 ///     ValueError: If any edge has a non-positive weight.
 #[pyfunction]
 #[pyo3(
-    text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None)"
+    text_signature = "(graph, /, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None)"
 )]
-#[pyo3(signature = (graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None))]
+#[pyo3(signature = (graph, /, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None))]
 pub fn louvain_communities(
     py: Python,
     graph: Py<PyAny>,
-    weight_fn: Option<Py<PyAny>>,
     resolution: f64,
     threshold: f64,
     seed: Option<u64>,
@@ -666,8 +757,6 @@ pub fn louvain_communities(
         return Ok(Vec::new());
     }
 
-    // Handle weight function
-
     // Set min_community_size to 1 by default (meaning no merging)
     let min_size = min_community_size.unwrap_or(1);
 
@@ -680,15 +769,7 @@ pub fn louvain_communities(
     };
 
     // Run the algorithm
-    let partitions = run_louvain(
-        py,
-        &graph_ref,
-        &weight_fn,
-        resolution,
-        threshold,
-        seed,
-        nx_adjacency,
-    )?;
+    let partitions = run_louvain(py, &graph_ref, resolution, threshold, seed, nx_adjacency)?;
 
     // Get the final partition
     let result = if partitions.is_empty() {
@@ -731,8 +812,6 @@ pub fn louvain_communities(
 ///     graph: The PyGraph object.
 ///     partition: A list of lists, where each inner list is a community
 ///         represented by a list of node indices.
-///     weight_fn: An optional callable function to get edge weights. If None,
-///         edges are considered unweighted (weight=1.0).
 ///     resolution: The resolution parameter for the modularity calculation.
 ///         Defaults to 1.0.
 ///
@@ -745,13 +824,12 @@ pub fn louvain_communities(
 ///                 contains out-of-bounds indices, or assigns a node to
 ///                 multiple communities).
 #[pyfunction]
-#[pyo3(text_signature = "(graph, partition, /, weight_fn=None, resolution=1.0)")]
-#[pyo3(signature = (graph, partition, /, weight_fn=None, resolution=1.0))]
+#[pyo3(text_signature = "(graph, partition, /, resolution=1.0)")]
+#[pyo3(signature = (graph, partition, /, resolution=1.0))]
 pub fn modularity(
     py: Python,
     graph: Py<PyAny>,
     partition: Vec<Vec<usize>>,
-    weight_fn: Option<Py<PyAny>>,
     resolution: Option<f64>,
 ) -> PyResult<f64> {
     // 1) Validate graph type
@@ -790,7 +868,7 @@ pub fn modularity(
     }
 
     // 3) Create GraphState and call the core modularity function
-    let gs = GraphState::from_pygraph(py, &pyg, &weight_fn)?;
+    let gs = GraphState::from_pygraph(py, &pyg)?;
     Ok(modularity_core(
         &gs,
         &node_to_comm,
@@ -820,7 +898,7 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     for u in 0..gs.num_nodes {
         let u_comm = node_to_comm[u];
 
-        for (&v, &weight) in &gs.adj[u] {
+        for &(v, weight) in &gs.neighbors[u] {
             let v_comm = node_to_comm[v];
 
             // If an edge is within a community, add its weight to the internal weight.

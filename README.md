@@ -175,6 +175,53 @@ when running `pip install`. That can be handy for debugging.
 > It's worth noting that `pip install -e` does not work, as it will link the python
 packaging shim to your python environment but not build the rustworkx binary.
 
+### Community Clustering Benchmark and Profiling (uv)
+
+For community clustering work (Louvain, Leiden, LPA, Cliques, CPM), run through `uv`:
+
+```bash
+uv run --group test bash ./test.sh
+```
+
+This full run executes, in order:
+
+- `cargo clean`
+- `cargo build`
+- `cargo test`
+- `RUSTFLAGS="-C opt-level=3" maturin develop --release`
+- `uv run --group test python -m pytest tests/graph/test_community.py`
+- `uv run --group test python benchmark_community.py`
+
+Useful shorter runs:
+
+```bash
+# community tests only
+uv run --group test python -m pytest tests/graph/test_community.py -q
+
+# benchmark only
+uv run --group test python benchmark_community.py
+```
+
+Benchmark outputs are written to `results/<YYYYMMDD>/`, including:
+
+- `benchmark_results_table.md`
+- `benchmark_results_table.png`
+- `community_detection_comparison.png`
+
+For targeted call-graph profiling on macOS, we used `sample` on a long-running, algorithm-only
+workload process (for `louvain`, `leiden`, and `lpa_strongest`):
+
+```bash
+mkdir -p results/<YYYYMMDD>/profiles
+PYTHONPATH=$(pwd) uv run --group test python /tmp/profile_rx_community.py --algo louvain --iterations 700 \
+  > results/<YYYYMMDD>/profiles/louvain_workload.log 2>&1 &
+
+# Get the python PID from the READY line in the workload log, then sample it:
+sample <python_pid> 10 -mayDie -file results/<YYYYMMDD>/profiles/louvain.sample.txt
+```
+
+Repeat the same pattern with `--algo leiden` and `--algo lpa_strongest`.
+
 ## Project history
 
 Rustworkx was originally called retworkx and was created initially to be

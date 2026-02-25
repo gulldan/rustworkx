@@ -590,31 +590,31 @@ class TestLouvainCommunities(unittest.TestCase):
     def test_valid_partition(self):
         """Test that Louvain produces a valid partition."""
         g = create_karate_club()
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_modularity_increase(self):
         """Test that Louvain increases modularity from singleton partition."""
         g = create_karate_club()
         singleton = [[i] for i in range(g.num_nodes())]
-        mod_singleton = rx_comm.modularity(g, singleton, weight_fn=lambda x: float(x))
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        mod_louvain = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        mod_singleton = rx_comm.modularity(g, singleton)
+        partition = rx_comm.louvain_communities(g, seed=42)
+        mod_louvain = rx_comm.modularity(g, partition)
         self.assertGreater(mod_louvain, mod_singleton)
 
     def test_karate_club_reasonable_communities(self):
         """Test that Louvain finds reasonable communities in Karate Club."""
         g = create_karate_club()
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertGreaterEqual(len(partition), 2)
         self.assertLessEqual(len(partition), 6)
-        mod = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        mod = rx_comm.modularity(g, partition)
         self.assertGreater(mod, 0.35)
 
     def test_two_cliques(self):
         """Test Louvain on two cliques connected by bridge."""
         g = create_two_cliques(10, 10, bridge=True)
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertEqual(len(partition), 2)
         result = {frozenset(c) for c in partition}
         expected = {frozenset(range(10)), frozenset(range(10, 20))}
@@ -623,7 +623,7 @@ class TestLouvainCommunities(unittest.TestCase):
     def test_complete_graph(self):
         """Test Louvain on complete graph - should find 1 community."""
         g = create_complete_graph(10)
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertEqual(len(partition), 1)
         self.assertEqual(set(partition[0]), set(range(10)))
 
@@ -631,43 +631,43 @@ class TestLouvainCommunities(unittest.TestCase):
         """Test that resolution parameter affects community count."""
         g = create_karate_club()
         partition_low = rx_comm.louvain_communities(
-            g, weight_fn=lambda x: float(x), resolution=0.5, seed=42
+            g, resolution=0.5, seed=42
         )
         partition_high = rx_comm.louvain_communities(
-            g, weight_fn=lambda x: float(x), resolution=2.0, seed=42
+            g, resolution=2.0, seed=42
         )
         self.assertGreaterEqual(len(partition_high), len(partition_low))
 
     def test_seed_reproducibility(self):
         """Test that same seed produces same results."""
         g = create_karate_club()
-        p1 = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p2 = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p1 = rx_comm.louvain_communities(g, seed=42)
+        p2 = rx_comm.louvain_communities(g, seed=42)
         self.assertEqual({frozenset(c) for c in p1}, {frozenset(c) for c in p2})
 
     def test_different_seeds(self):
         """Test that different seeds may produce different results."""
         g = create_karate_club()
         # Just verify both complete successfully
-        p1 = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=1)
-        p2 = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=999)
+        p1 = rx_comm.louvain_communities(g, seed=1)
+        p2 = rx_comm.louvain_communities(g, seed=999)
         self.assertTrue(is_partition(g, p1))
         self.assertTrue(is_partition(g, p2))
 
     def test_louvain_repeatable_runs_same_seed(self):
         """Multiple runs with same seed should be identical (stability check)."""
         g = create_two_cliques(6, 6, bridge=True)
-        first = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=123)
+        first = rx_comm.louvain_communities(g, seed=123)
         first_set = {frozenset(c) for c in first}
         for _ in range(5):
-            nxt = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=123)
+            nxt = rx_comm.louvain_communities(g, seed=123)
             self.assertEqual(first_set, {frozenset(c) for c in nxt})
 
     def test_min_community_size(self):
         """Test min_community_size parameter."""
         g = create_karate_club()
         partition = rx_comm.louvain_communities(
-            g, weight_fn=lambda x: float(x), seed=42, min_community_size=5
+            g, seed=42, min_community_size=5
         )
         for comm in partition:
             self.assertGreaterEqual(len(comm), 5)
@@ -698,20 +698,20 @@ class TestLeidenCommunities(unittest.TestCase):
     def test_valid_partition(self):
         """Test that Leiden produces valid partition."""
         g = create_karate_club()
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.leiden_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_modularity_positive(self):
         """Test that Leiden achieves positive modularity."""
         g = create_karate_club()
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
-        mod = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        partition = rx_comm.leiden_communities(g, seed=42)
+        mod = rx_comm.modularity(g, partition)
         self.assertGreater(mod, 0.3)
 
     def test_two_cliques(self):
         """Test that Leiden correctly separates two cliques."""
         g = create_two_cliques(10, 10, bridge=True)
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.leiden_communities(g, seed=42)
         self.assertEqual(len(partition), 2)
         result = {frozenset(c) for c in partition}
         expected = {frozenset(range(10)), frozenset(range(10, 20))}
@@ -720,14 +720,14 @@ class TestLeidenCommunities(unittest.TestCase):
     def test_disconnected_components(self):
         """Test Leiden on disconnected graph."""
         g = create_two_cliques(5, 5, bridge=False)
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.leiden_communities(g, seed=42)
         self.assertGreaterEqual(len(partition), 2)
         self.assertTrue(is_partition(g, partition))
 
     def test_complete_graph(self):
         """Test Leiden on complete graph - should find 1 community."""
         g = create_complete_graph(10)
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.leiden_communities(g, seed=42)
         self.assertEqual(len(partition), 1)
         self.assertEqual(set(partition[0]), set(range(10)))
 
@@ -735,35 +735,35 @@ class TestLeidenCommunities(unittest.TestCase):
         """Test that resolution parameter affects community size."""
         g = create_karate_club()
         partition_low = rx_comm.leiden_communities(
-            g, weight_fn=lambda x: float(x), resolution=0.5, seed=42
+            g, resolution=0.5, seed=42
         )
         partition_high = rx_comm.leiden_communities(
-            g, weight_fn=lambda x: float(x), resolution=2.0, seed=42
+            g, resolution=2.0, seed=42
         )
         self.assertGreaterEqual(len(partition_high), len(partition_low))
 
     def test_seed_reproducibility(self):
         """Test that same seed produces same results."""
         g = create_karate_club()
-        p1 = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p2 = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p1 = rx_comm.leiden_communities(g, seed=42)
+        p2 = rx_comm.leiden_communities(g, seed=42)
         self.assertEqual({frozenset(c) for c in p1}, {frozenset(c) for c in p2})
 
     def test_max_iterations(self):
         """Test max_iterations parameter."""
         g = create_karate_club()
         partition = rx_comm.leiden_communities(
-            g, weight_fn=lambda x: float(x), seed=42, max_iterations=5
+            g, seed=42, max_iterations=5
         )
         self.assertTrue(is_partition(g, partition))
 
     def test_leiden_repeatable_runs_same_seed(self):
         """Multiple runs with same seed should be identical (stability check)."""
         g = create_two_cliques(8, 8, bridge=True)
-        first = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=321)
+        first = rx_comm.leiden_communities(g, seed=321)
         first_set = {frozenset(c) for c in first}
         for _ in range(5):
-            nxt = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=321)
+            nxt = rx_comm.leiden_communities(g, seed=321)
             self.assertEqual(first_set, {frozenset(c) for c in nxt})
 
 
@@ -1380,7 +1380,7 @@ class TestModularity(unittest.TestCase):
         """Test modularity of singleton partition (each node own community)."""
         g = create_karate_club()
         partition = [[i] for i in range(g.num_nodes())]
-        mod = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        mod = rx_comm.modularity(g, partition)
         # Singleton should have negative or near-zero modularity
         self.assertLess(mod, 0.1)
 
@@ -1388,22 +1388,22 @@ class TestModularity(unittest.TestCase):
         """Test modularity when all nodes in one community."""
         g = create_karate_club()
         partition = [list(range(g.num_nodes()))]
-        mod = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        mod = rx_comm.modularity(g, partition)
         self.assertAlmostEqual(mod, 0.0, places=5)
 
     def test_optimal_partition_high_modularity(self):
         """Test that good partition has high modularity."""
         g = create_two_cliques(10, 10, bridge=True)
         partition = [list(range(10)), list(range(10, 20))]
-        mod = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x))
+        mod = rx_comm.modularity(g, partition)
         self.assertGreater(mod, 0.4)
 
     def test_modularity_resolution(self):
         """Test resolution parameter affects modularity."""
         g = create_karate_club()
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        mod1 = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x), resolution=1.0)
-        mod2 = rx_comm.modularity(g, partition, weight_fn=lambda x: float(x), resolution=2.0)
+        partition = rx_comm.louvain_communities(g, seed=42)
+        mod1 = rx_comm.modularity(g, partition, resolution=1.0)
+        mod2 = rx_comm.modularity(g, partition, resolution=2.0)
         # Different resolutions give different modularity values
         self.assertNotEqual(mod1, mod2)
 
@@ -1419,7 +1419,7 @@ class TestEdgeCases(unittest.TestCase):
     def test_star_graph_louvain(self):
         """Test Louvain on star graph."""
         g = create_star_graph(20)
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
         # Star should be 1 community
         self.assertEqual(len(partition), 1)
@@ -1427,15 +1427,15 @@ class TestEdgeCases(unittest.TestCase):
     def test_star_graph_leiden(self):
         """Test Leiden on star graph."""
         g = create_star_graph(20)
-        partition = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.leiden_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_path_graph_all_algorithms(self):
         """Test all algorithms on path graph."""
         g = create_path_graph(20)
 
-        p_louv = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p_leid = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p_louv = rx_comm.louvain_communities(g, seed=42)
+        p_leid = rx_comm.leiden_communities(g, seed=42)
         p_lpa = rx_comm.asyn_lpa_communities(g, seed=42)
 
         self.assertTrue(is_partition(g, p_louv))
@@ -1446,8 +1446,8 @@ class TestEdgeCases(unittest.TestCase):
         """Test all algorithms on cycle graph."""
         g = create_cycle_graph(20)
 
-        p_louv = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p_leid = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p_louv = rx_comm.louvain_communities(g, seed=42)
+        p_leid = rx_comm.leiden_communities(g, seed=42)
         p_lpa = rx_comm.asyn_lpa_communities(g, seed=42)
 
         self.assertTrue(is_partition(g, p_louv))
@@ -1458,8 +1458,8 @@ class TestEdgeCases(unittest.TestCase):
         """Test algorithms on barbell graph (two cliques with bridge)."""
         g = create_barbell_graph(10, 10)
 
-        p_louv = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p_leid = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p_louv = rx_comm.louvain_communities(g, seed=42)
+        p_leid = rx_comm.leiden_communities(g, seed=42)
 
         self.assertTrue(is_partition(g, p_louv))
         self.assertTrue(is_partition(g, p_leid))
@@ -1478,7 +1478,7 @@ class TestEdgeCases(unittest.TestCase):
         g.add_edge(4, 5, 1e-10)
         g.add_edge(5, 3, 1e-10)
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_very_large_weights(self):
@@ -1493,7 +1493,7 @@ class TestEdgeCases(unittest.TestCase):
         g.add_edge(5, 3, 1e10)
         g.add_edge(2, 3, 1.0)  # Weak bridge
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
         # Should separate the two triangles
         self.assertEqual(len(partition), 2)
@@ -1508,7 +1508,7 @@ class TestEdgeCases(unittest.TestCase):
         g.add_edge(0, 0, 1.0)  # Self-loop
         g.add_edge(2, 2, 1.0)  # Self-loop
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_negative_weights_should_work(self):
@@ -1521,7 +1521,7 @@ class TestEdgeCases(unittest.TestCase):
 
         # Should complete without crash
         try:
-            partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+            partition = rx_comm.louvain_communities(g, seed=42)
             self.assertTrue(is_partition(g, partition))
         except ValueError:
             # It's acceptable to reject negative weights
@@ -1549,7 +1549,7 @@ class TestComplexCases(unittest.TestCase):
         for i in range(4):
             g.add_edge(i * 20 + 19, (i + 1) * 20, 0.1)
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
         # Should find multiple communities
         self.assertGreater(len(partition), 1)
@@ -1571,7 +1571,7 @@ class TestComplexCases(unittest.TestCase):
         # Bridge
         g.add_edge(9, 10, 0.1)
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
 
     def test_hierarchical_structure(self):
@@ -1593,7 +1593,7 @@ class TestComplexCases(unittest.TestCase):
         # Connect the two groups with weak edge
         g.add_edge(11, 12, 0.1)
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
         # Should find some community structure
         self.assertGreater(len(partition), 1)
@@ -1616,7 +1616,7 @@ class TestComplexCases(unittest.TestCase):
         # Weak bridge
         g.add_edge(24, 25, 0.1)
 
-        partition = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
+        partition = rx_comm.louvain_communities(g, seed=42)
         self.assertTrue(is_partition(g, partition))
         self.assertEqual(len(partition), 2)
 
@@ -1624,8 +1624,8 @@ class TestComplexCases(unittest.TestCase):
         """Test that all algorithms produce valid partitions on same graph."""
         g = create_karate_club()
 
-        p_louv = rx_comm.louvain_communities(g, weight_fn=lambda x: float(x), seed=42)
-        p_leid = rx_comm.leiden_communities(g, weight_fn=lambda x: float(x), seed=42)
+        p_louv = rx_comm.louvain_communities(g, seed=42)
+        p_leid = rx_comm.leiden_communities(g, seed=42)
         p_lpa = rx_comm.asyn_lpa_communities(g, seed=42)
 
         # All should be valid partitions
@@ -1634,9 +1634,9 @@ class TestComplexCases(unittest.TestCase):
         self.assertTrue(is_partition(g, p_lpa))
 
         # All should have positive modularity
-        mod_louv = rx_comm.modularity(g, p_louv, weight_fn=lambda x: float(x))
-        mod_leid = rx_comm.modularity(g, p_leid, weight_fn=lambda x: float(x))
-        mod_lpa = rx_comm.modularity(g, p_lpa, weight_fn=lambda x: float(x))
+        mod_louv = rx_comm.modularity(g, p_louv)
+        mod_leid = rx_comm.modularity(g, p_leid)
+        mod_lpa = rx_comm.modularity(g, p_lpa)
 
         self.assertGreater(mod_louv, 0)
         self.assertGreater(mod_leid, 0)

@@ -397,12 +397,35 @@ fn bron_kerbosch_bitset_recursive(
         return;
     }
 
-    // TODO: Add pivot selection for further optimization
+    let mut pivot_union = candidates_mask | excluded_mask;
+    let mut pivot_neighbors_mask: u64 = 0;
+    let mut max_neighbors_in_candidates = 0u32;
+    while pivot_union != 0 {
+        let u_bit_pos = pivot_union.trailing_zeros();
+        let u = u_bit_pos;
+        let u_mask = 1u64 << u_bit_pos;
+        pivot_union &= !u_mask;
+        let neighbors_u = adj.get(&u).copied().unwrap_or(0);
+        let neighbors_in_candidates = (candidates_mask & neighbors_u).count_ones();
+        if neighbors_in_candidates > max_neighbors_in_candidates {
+            max_neighbors_in_candidates = neighbors_in_candidates;
+            pivot_neighbors_mask = neighbors_u;
+            if neighbors_in_candidates == candidates_mask.count_ones() {
+                break;
+            }
+        }
+    }
 
-    while candidates_mask != 0 {
-        let v_bit_pos = candidates_mask.trailing_zeros();
+    let mut candidates_to_explore = candidates_mask & !pivot_neighbors_mask;
+    if candidates_to_explore == 0 {
+        candidates_to_explore = candidates_mask;
+    }
+
+    while candidates_to_explore != 0 {
+        let v_bit_pos = candidates_to_explore.trailing_zeros();
         let v = v_bit_pos;
         let v_mask = 1u64 << v_bit_pos;
+        candidates_to_explore &= !v_mask;
         let neighbors_v_mask = adj.get(&v).copied().unwrap_or(0);
 
         potential_clique.push(v);
@@ -479,9 +502,38 @@ fn bron_kerbosch_hashset_recursive(
         return;
     }
 
-    // TODO: Add pivot selection for further optimization
+    let mut pivot: Option<u32> = None;
+    let mut max_neighbors_in_candidates = 0usize;
+    for &u in candidates.iter().chain(excluded.iter()) {
+        let neighbors_in_candidates = adj
+            .get(&u)
+            .map(|neighbors| {
+                neighbors
+                    .iter()
+                    .filter(|&&neighbor| candidates.contains(&neighbor))
+                    .count()
+            })
+            .unwrap_or(0);
+        if neighbors_in_candidates > max_neighbors_in_candidates {
+            max_neighbors_in_candidates = neighbors_in_candidates;
+            pivot = Some(u);
+        }
+    }
 
-    let candidates_vec: Vec<u32> = candidates.iter().cloned().collect();
+    let candidates_vec: Vec<u32> = if let Some(pivot_node) = pivot {
+        let pivot_neighbors = adj.get(&pivot_node);
+        candidates
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                !pivot_neighbors
+                    .map(|neighbors| neighbors.contains(candidate))
+                    .unwrap_or(false)
+            })
+            .collect()
+    } else {
+        candidates.iter().copied().collect()
+    };
     let empty_neighbors = HashSet::new();
 
     for v in candidates_vec {

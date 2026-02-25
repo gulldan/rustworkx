@@ -1,9 +1,8 @@
-"""Compatibility facade for plotting and table generation helpers.
+"""Implementation aggregator for plotting helpers."""
 
-Implementation moved to ``plotting_impl.py`` to keep this public module compact.
-"""
-
-from plotting_impl import (
+from plotting_chart import create_comparison_chart
+from plotting_gcr import plot_gcr_pcp_vs_jaccard_threshold
+from plotting_shared import (
     ALGORITHMS_METADATA,
     BenchmarkResultItem,
     BenchmarkResultsList,
@@ -17,13 +16,13 @@ from plotting_impl import (
     _coerce_float_metric_value,
     _format_metric_cell_value,
     _get_algo_run_elapsed_and_presence,
-    create_comparison_chart,
+    get_valid_benchmark_results,
+    style_exact_match_markdown_cell,
+)
+from plotting_tables import (
     generate_results_table,
     generate_results_table_matplotlib,
     get_color_for_cell_mpl,
-    get_valid_benchmark_results,
-    plot_gcr_pcp_vs_jaccard_threshold,
-    style_exact_match_markdown_cell,
 )
 
 __all__ = [

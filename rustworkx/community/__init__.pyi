@@ -11,14 +11,11 @@
 
 from rustworkx import PyGraph
 from rustworkx import PyDiGraph
-
-from typing import Any, Callable
 from collections.abc import Sequence
 
 def louvain_communities(
     graph: PyGraph,
     /,
-    weight_fn: Callable[[Any], float] | None = ...,
     resolution: float = ...,
     threshold: float = ...,
     seed: int | None = ...,
@@ -27,15 +24,13 @@ def louvain_communities(
 ) -> list[list[int]]: ...
 def modularity(
     graph: PyGraph,
-    communities: Sequence[Sequence[int]],
+    partition: Sequence[Sequence[int]],
     /,
-    weight_fn: Callable[[Any], float] | None = ...,
     resolution: float = ...,
 ) -> float: ...
 def leiden_communities(
-    graph: PyGraph | PyDiGraph,
+    graph: PyGraph,
     /,
-    weight_fn: Callable[[Any], float] | None = ...,
     resolution: float = ...,
     seed: int | None = ...,
     min_weight: float | None = ...,

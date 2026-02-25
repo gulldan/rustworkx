@@ -18,6 +18,17 @@ use crate::community::common::{
     shuffle_nodes,
 };
 
+#[inline]
+fn next_mark_token(mark_token: &mut u64, marks: &mut [u64]) -> u64 {
+    let token = *mark_token;
+    *mark_token = mark_token.wrapping_add(1);
+    if *mark_token == 0 {
+        marks.fill(0);
+        *mark_token = 1;
+    }
+    token
+}
+
 /// Asynchronous Label Propagation (strongest-edge variant).
 ///
 /// Matches the NetworkX-style implementation where, for each node, only the
@@ -54,7 +65,33 @@ pub fn asyn_lpa_communities_strongest(
     let mut rng = build_rng(seed);
 
     // Build adjacency with edge weights (defaulting to 1.0 when weight is None).
-    let mut adjacency: Vec<Vec<(usize, f64)>> = (0..n).map(|_| Vec::with_capacity(4)).collect();
+    // First pass: count neighbor entries per node to pre-size vectors and reduce reallocations.
+    let mut neighbor_counts: Vec<usize> = vec![0; n];
+    match &g {
+        GraphRef::Undirected(gr) => {
+            for e in gr.graph.edge_references() {
+                let u = e.source().index();
+                let v = e.target().index();
+                if u == v {
+                    neighbor_counts[u] += 1;
+                } else {
+                    neighbor_counts[u] += 1;
+                    neighbor_counts[v] += 1;
+                }
+            }
+        }
+        GraphRef::Directed(gr) => {
+            for e in gr.graph.edge_references() {
+                let u = e.source().index();
+                neighbor_counts[u] += 1;
+            }
+        }
+    }
+
+    let mut adjacency: Vec<Vec<(usize, f64)>> = neighbor_counts
+        .into_iter()
+        .map(Vec::with_capacity)
+        .collect();
     let weight_name = weight.as_ref();
 
     match &g {
@@ -111,6 +148,8 @@ pub fn asyn_lpa_communities_strongest(
 
     // Working buffer for best labels
     let mut best_labels: Vec<usize> = Vec::with_capacity(8);
+    let mut label_marks: Vec<u64> = vec![0; n];
+    let mut mark_token: u64 = 1;
 
     // Main asynchronous loop
     let mut changed = true;
@@ -132,14 +171,21 @@ pub fn asyn_lpa_communities_strongest(
             // Find maximum edge weight and collect labels of neighbors with that weight
             let mut max_weight = f64::NEG_INFINITY;
             best_labels.clear();
+            let mut current_token = next_mark_token(&mut mark_token, &mut label_marks);
 
             for &(nbr, w) in neighbors {
-                let lab = labels[nbr];
                 if w > max_weight {
                     max_weight = w;
                     best_labels.clear();
-                    best_labels.push(lab);
-                } else if w == max_weight && !best_labels.contains(&lab) {
+                    current_token = next_mark_token(&mut mark_token, &mut label_marks);
+                }
+
+                if w == max_weight {
+                    let lab = labels[nbr];
+                    if label_marks[lab] == current_token {
+                        continue;
+                    }
+                    label_marks[lab] = current_token;
                     best_labels.push(lab);
                 }
             }
@@ -149,7 +195,7 @@ pub fn asyn_lpa_communities_strongest(
             }
 
             // If current label is not in best_labels, pick a random one (matches Python)
-            if !best_labels.contains(&labels[node]) {
+            if label_marks[labels[node]] != current_token {
                 let chosen = choose_random(&mut rng, &best_labels);
                 labels[node] = chosen;
                 changed = true;

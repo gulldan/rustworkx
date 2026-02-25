@@ -86,6 +86,30 @@ pub fn asyn_lpa_communities(
     let mut adj_unweighted: Option<Vec<Vec<usize>>> = None;
     let mut adj_weighted: Option<Vec<Vec<(usize, f64)>>> = None;
 
+    let mut neighbor_counts: Vec<usize> = vec![0; n];
+    if adjacency.is_none() {
+        match &g {
+            GraphRef::Undirected(gr) => {
+                for e in gr.graph.edge_references() {
+                    let u = e.source().index();
+                    let v = e.target().index();
+                    if u == v {
+                        neighbor_counts[u] += 1;
+                    } else {
+                        neighbor_counts[u] += 1;
+                        neighbor_counts[v] += 1;
+                    }
+                }
+            }
+            GraphRef::Directed(gr) => {
+                for e in gr.graph.edge_references() {
+                    let u = e.source().index();
+                    neighbor_counts[u] += 1;
+                }
+            }
+        }
+    }
+
     // If adjacency is provided, use it directly
     if let Some(ref provided_adj) = adjacency {
         if !use_weight {
@@ -95,13 +119,16 @@ pub fn asyn_lpa_communities(
             // For weighted case with provided adjacency, build weighted adjacency
             // by looking up weights from the graph
             let wname = weight.as_ref().unwrap();
-            let mut neigh_lists: Vec<Vec<(usize, f64)>> =
-                (0..n).map(|_| Vec::with_capacity(4)).collect();
+            let mut neigh_lists: Vec<Vec<(usize, f64)>> = provided_adj
+                .iter()
+                .map(|neighbors| Vec::with_capacity(neighbors.len()))
+                .collect();
 
             match &g {
                 GraphRef::Undirected(gr) => {
                     // Build a quick edge weight lookup
-                    let mut edge_weights: HashMap<(usize, usize), f64> = HashMap::new();
+                    let mut edge_weights: HashMap<(usize, usize), f64> =
+                        HashMap::with_capacity(gr.graph.edge_count());
                     for e in gr.graph.edge_references() {
                         let u = e.source().index();
                         let v = e.target().index();
@@ -124,7 +151,8 @@ pub fn asyn_lpa_communities(
                 }
                 GraphRef::Directed(gr) => {
                     // For directed graphs, use provided adjacency with weights
-                    let mut edge_weights: HashMap<(usize, usize), f64> = HashMap::new();
+                    let mut edge_weights: HashMap<(usize, usize), f64> =
+                        HashMap::with_capacity(gr.graph.edge_count());
                     for e in gr.graph.edge_references() {
                         let u = e.source().index();
                         let v = e.target().index();
@@ -147,8 +175,16 @@ pub fn asyn_lpa_communities(
         }
     } else if !use_weight {
         // Unweighted case: collect unique neighbors preserving edge iteration order.
-        let mut neigh_lists: Vec<Vec<usize>> = (0..n).map(|_| Vec::with_capacity(4)).collect();
-        let mut seen: Vec<HashMap<usize, ()>> = (0..n).map(|_| HashMap::with_capacity(4)).collect();
+        let mut neigh_lists: Vec<Vec<usize>> = neighbor_counts
+            .iter()
+            .copied()
+            .map(Vec::with_capacity)
+            .collect();
+        let mut seen: Vec<HashMap<usize, ()>> = neighbor_counts
+            .iter()
+            .copied()
+            .map(HashMap::with_capacity)
+            .collect();
 
         match &g {
             // Undirected: add both directions, self-loop counted 1x
@@ -182,10 +218,16 @@ pub fn asyn_lpa_communities(
     } else {
         // Weighted case: sum weights per neighbor, preserving edge iteration order.
         let wname = weight.as_ref().unwrap();
-        let mut neigh_lists: Vec<Vec<(usize, f64)>> =
-            (0..n).map(|_| Vec::with_capacity(4)).collect();
-        let mut weight_maps: Vec<HashMap<usize, usize>> =
-            (0..n).map(|_| HashMap::with_capacity(4)).collect();
+        let mut neigh_lists: Vec<Vec<(usize, f64)>> = neighbor_counts
+            .iter()
+            .copied()
+            .map(Vec::with_capacity)
+            .collect();
+        let mut weight_maps: Vec<HashMap<usize, usize>> = neighbor_counts
+            .iter()
+            .copied()
+            .map(HashMap::with_capacity)
+            .collect();
 
         match &g {
             // Undirected: add to both sides; self-loop counted 1x
@@ -260,55 +302,118 @@ pub fn asyn_lpa_communities(
     let mut iter = 0usize;
     let mut cont = true;
 
-    while cont {
-        if let Some(limit) = max_iterations {
-            if iter >= limit {
-                break;
+    if !use_weight {
+        let adj = adj_unweighted.as_ref().unwrap();
+        while cont {
+            if let Some(limit) = max_iterations {
+                if iter >= limit {
+                    break;
+                }
             }
-        }
-        iter += 1;
-        cont = false;
+            iter += 1;
+            cont = false;
 
-        // Shuffle nodes in random order.
-        if let Some(py_rng) = py_compat_rng.as_mut() {
-            for i in 0..n {
-                nodes[i] = i;
-            }
-            py_rng.shuffle(&mut nodes);
-        } else {
-            // Reset nodes to [0, 1, 2, ..., n-1] before shuffling
-            for i in 0..n {
-                nodes[i] = i;
-            }
-            shuffle_nodes(&mut rng, &mut nodes);
-        }
-
-        for &node in &nodes {
-            // Quick check: does this node have neighbors?
-            let has_neighbors = if !use_weight {
-                !adj_unweighted.as_ref().unwrap()[node].is_empty()
+            // Shuffle nodes in random order.
+            if let Some(py_rng) = py_compat_rng.as_mut() {
+                for i in 0..n {
+                    nodes[i] = i;
+                }
+                py_rng.shuffle(&mut nodes);
             } else {
-                !adj_weighted.as_ref().unwrap()[node].is_empty()
-            };
-            if !has_neighbors {
-                continue;
+                for i in 0..n {
+                    nodes[i] = i;
+                }
+                shuffle_nodes(&mut rng, &mut nodes);
             }
 
-            // Count label frequencies among neighbors
-            touched.clear();
+            for &node in &nodes {
+                let neighbors = &adj[node];
+                if neighbors.is_empty() {
+                    continue;
+                }
 
-            if !use_weight {
-                // Unweighted: +1 per neighbor's label
-                for &nbr in &adj_unweighted.as_ref().unwrap()[node] {
+                // Count label frequencies among neighbors.
+                touched.clear();
+                for &nbr in neighbors {
                     let lab = labels[nbr];
                     if label_counts[lab] == 0.0 {
                         touched.push(lab);
                     }
                     label_counts[lab] += 1.0;
                 }
+
+                // Find max frequency and best labels in one pass over touched.
+                // Also track if current label is among the best to avoid contains() lookup.
+                let mut max_freq = f64::NEG_INFINITY;
+                best_labels.clear();
+                let mut current_is_best = false;
+
+                for &lab in &touched {
+                    let val = label_counts[lab];
+                    if val > max_freq {
+                        max_freq = val;
+                        best_labels.clear();
+                        best_labels.push(lab);
+                        current_is_best = lab == labels[node];
+                    } else if val == max_freq {
+                        best_labels.push(lab);
+                        if lab == labels[node] {
+                            current_is_best = true;
+                        }
+                    }
+                }
+
+                // Reset only touched counters.
+                for &lab in &touched {
+                    label_counts[lab] = 0.0;
+                }
+
+                // Update: if current label is in best_labels, node keeps its label.
+                // Otherwise, randomly choose one of the best labels.
+                if !best_labels.is_empty() && !current_is_best {
+                    let chosen = if let Some(py_rng) = py_compat_rng.as_mut() {
+                        *py_rng.choose(&best_labels)
+                    } else {
+                        choose_random(&mut rng, &best_labels)
+                    };
+                    labels[node] = chosen;
+                    cont = true;
+                }
+            }
+        }
+    } else {
+        let adj = adj_weighted.as_ref().unwrap();
+        while cont {
+            if let Some(limit) = max_iterations {
+                if iter >= limit {
+                    break;
+                }
+            }
+            iter += 1;
+            cont = false;
+
+            // Shuffle nodes in random order.
+            if let Some(py_rng) = py_compat_rng.as_mut() {
+                for i in 0..n {
+                    nodes[i] = i;
+                }
+                py_rng.shuffle(&mut nodes);
             } else {
-                // Weighted: +w per neighbor's label (weights already aggregated)
-                for &(nbr, w) in &adj_weighted.as_ref().unwrap()[node] {
+                for i in 0..n {
+                    nodes[i] = i;
+                }
+                shuffle_nodes(&mut rng, &mut nodes);
+            }
+
+            for &node in &nodes {
+                let neighbors = &adj[node];
+                if neighbors.is_empty() {
+                    continue;
+                }
+
+                // Count label frequencies among neighbors.
+                touched.clear();
+                for &(nbr, w) in neighbors {
                     debug_assert!(w.is_finite());
                     let lab = labels[nbr];
                     if label_counts[lab] == 0.0 {
@@ -316,44 +421,44 @@ pub fn asyn_lpa_communities(
                     }
                     label_counts[lab] += w;
                 }
-            }
 
-            // Find max frequency and best labels in one pass over touched.
-            // Also track if current label is among the best to avoid contains() lookup.
-            let mut max_freq = f64::NEG_INFINITY;
-            best_labels.clear();
-            let mut current_is_best = false;
+                // Find max frequency and best labels in one pass over touched.
+                // Also track if current label is among the best to avoid contains() lookup.
+                let mut max_freq = f64::NEG_INFINITY;
+                best_labels.clear();
+                let mut current_is_best = false;
 
-            for &lab in &touched {
-                let val = label_counts[lab];
-                if val > max_freq {
-                    max_freq = val;
-                    best_labels.clear();
-                    best_labels.push(lab);
-                    current_is_best = lab == labels[node];
-                } else if val == max_freq {
-                    best_labels.push(lab);
-                    if lab == labels[node] {
-                        current_is_best = true;
+                for &lab in &touched {
+                    let val = label_counts[lab];
+                    if val > max_freq {
+                        max_freq = val;
+                        best_labels.clear();
+                        best_labels.push(lab);
+                        current_is_best = lab == labels[node];
+                    } else if val == max_freq {
+                        best_labels.push(lab);
+                        if lab == labels[node] {
+                            current_is_best = true;
+                        }
                     }
                 }
-            }
 
-            // Reset only touched counters
-            for &lab in &touched {
-                label_counts[lab] = 0.0;
-            }
+                // Reset only touched counters.
+                for &lab in &touched {
+                    label_counts[lab] = 0.0;
+                }
 
-            // Update: if current label is in best_labels, node keeps its label.
-            // Otherwise, randomly choose one of the best labels.
-            if !best_labels.is_empty() && !current_is_best {
-                let chosen = if let Some(py_rng) = py_compat_rng.as_mut() {
-                    *py_rng.choose(&best_labels)
-                } else {
-                    choose_random(&mut rng, &best_labels)
-                };
-                labels[node] = chosen;
-                cont = true;
+                // Update: if current label is in best_labels, node keeps its label.
+                // Otherwise, randomly choose one of the best labels.
+                if !best_labels.is_empty() && !current_is_best {
+                    let chosen = if let Some(py_rng) = py_compat_rng.as_mut() {
+                        *py_rng.choose(&best_labels)
+                    } else {
+                        choose_random(&mut rng, &best_labels)
+                    };
+                    labels[node] = chosen;
+                    cont = true;
+                }
             }
         }
     }
