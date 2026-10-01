@@ -36,12 +36,12 @@ def test_lpa_two_communities_matches_nx_count():
         g.add_edge(u, v, None)
 
     # Build the same for NetworkX
-    nx_g = nx.Graph()
+    nx_g = networkx.Graph()
     nx_g.add_nodes_from(range(8))
     nx_g.add_edges_from(edges)
 
     seed = 42
-    nx_comms = list(nx.community.asyn_lpa_communities(nx_g, seed=seed))
+    nx_comms = list(networkx.community.asyn_lpa_communities(nx_g, seed=seed))
     rx_comms = rx.community.asyn_lpa_communities(g, seed=seed)
 
     assert len(nx_comms) == len(rx_comms)

@@ -263,7 +263,7 @@ fn weight_callable<'p, T>(
     default: T,
 ) -> PyResult<T>
 where
-    T: FromPyObject<'p>,
+    T: FromPyObjectOwned<'p, Error = PyErr>,
 {
     match weight_fn {
         Some(weight_fn) => {
@@ -281,7 +281,7 @@ pub fn edge_weights_from_callable<'p, T, Ty: EdgeType>(
     default_weight: T,
 ) -> PyResult<Vec<Option<T>>>
 where
-    T: FromPyObject<'p> + Copy,
+    T: FromPyObjectOwned<'p, Error = PyErr> + Copy,
 {
     let mut edge_weights: Vec<Option<T>> = Vec::with_capacity(graph.edge_bound());
     for index in 0..=graph.edge_bound() {
@@ -594,6 +594,12 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_degree_centrality))?;
     m.add_wrapped(wrap_pyfunction!(in_degree_centrality))?;
     m.add_wrapped(wrap_pyfunction!(out_degree_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(graph_group_degree_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_group_degree_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(graph_group_closeness_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_group_closeness_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(graph_group_betweenness_centrality))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_group_betweenness_centrality))?;
     m.add_wrapped(wrap_pyfunction!(graph_astar_shortest_path))?;
     m.add_wrapped(wrap_pyfunction!(digraph_astar_shortest_path))?;
     m.add_wrapped(wrap_pyfunction!(graph_greedy_color))?;
@@ -607,6 +613,7 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(graph_line_graph))?;
     m.add_wrapped(wrap_pyfunction!(graph_tensor_product))?;
     m.add_wrapped(wrap_pyfunction!(digraph_tensor_product))?;
+    m.add_wrapped(wrap_pyfunction!(random_regular_graph))?;
     m.add_wrapped(wrap_pyfunction!(directed_gnp_random_graph))?;
     m.add_wrapped(wrap_pyfunction!(undirected_gnp_random_graph))?;
     m.add_wrapped(wrap_pyfunction!(directed_gnm_random_graph))?;
@@ -652,6 +659,8 @@ fn rustworkx(py: Python<'_>, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(digraph_bipartite_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_circular_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_circular_layout))?;
+    m.add_wrapped(wrap_pyfunction!(graph_kamada_kawai_layout))?;
+    m.add_wrapped(wrap_pyfunction!(digraph_kamada_kawai_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(digraph_shell_layout))?;
     m.add_wrapped(wrap_pyfunction!(graph_spiral_layout))?;

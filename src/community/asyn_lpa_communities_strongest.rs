@@ -118,8 +118,8 @@ pub fn asyn_lpa_communities_strongest(
         changed = false;
 
         // Reset nodes to [0, 1, 2, ..., n-1] and shuffle (matches Python: seed.shuffle(nodes))
-        for i in 0..n {
-            nodes[i] = i;
+        for (i, node) in nodes.iter_mut().enumerate() {
+            *node = i;
         }
         shuffle_nodes(&mut rng, &mut nodes);
 

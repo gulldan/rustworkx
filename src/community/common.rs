@@ -20,6 +20,7 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyMapping};
 use rand::prelude::*;
+use rand::rngs::SysRng;
 use rand_pcg::Pcg64;
 
 use crate::digraph::PyDiGraph;
@@ -41,13 +42,13 @@ pub(crate) type CommunityRng = Pcg64;
 pub(crate) fn build_rng(seed: Option<u64>) -> CommunityRng {
     match seed {
         Some(s) => Pcg64::seed_from_u64(s),
-        None => Pcg64::from_os_rng(),
+        None => Pcg64::try_from_rng(&mut SysRng).unwrap(),
     }
 }
 
 /// Shuffle a vector of node indices in-place using the provided RNG.
 #[inline]
-pub(crate) fn shuffle_nodes(rng: &mut CommunityRng, nodes: &mut Vec<usize>) {
+pub(crate) fn shuffle_nodes(rng: &mut CommunityRng, nodes: &mut [usize]) {
     nodes.shuffle(rng);
 }
 
@@ -249,7 +250,7 @@ pub(crate) fn get_named_weight<'py>(obj: &Bound<'py, PyAny>, attr: &str) -> PyRe
     }
 
     // Try dict access
-    if let Ok(d) = obj.downcast::<PyDict>() {
+    if let Ok(d) = obj.cast::<PyDict>() {
         if let Some(v) = d.get_item(attr)? {
             return v.extract::<f64>();
         } else {
@@ -258,7 +259,7 @@ pub(crate) fn get_named_weight<'py>(obj: &Bound<'py, PyAny>, attr: &str) -> PyRe
     }
 
     // Try mapping access
-    if let Ok(m) = obj.downcast::<PyMapping>() {
+    if let Ok(m) = obj.cast::<PyMapping>() {
         match m.get_item(attr) {
             Ok(v) => return v.extract::<f64>(),
             Err(_key_err) => return Ok(1.0),

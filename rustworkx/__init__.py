@@ -95,12 +95,14 @@ class PyDAG(PyDiGraph):
     attribute to True. For example::
 
         import rustworkx as rx
+
         dag = rx.PyDAG()
         dag.check_cycle = True
 
     or at object creation::
 
         import rustworkx as rx
+
         dag = rx.PyDAG(check_cycle=True)
 
     With check_cycle set to true any calls to :meth:`PyDAG.add_edge` will
@@ -120,6 +122,7 @@ class PyDAG(PyDiGraph):
     For example::
 
         import rustworkx as rx
+
         dag = rx.PyDAG(multigraph=False)
 
     This can only be set at ``PyDiGraph`` initialization and not adjusted after
@@ -229,7 +232,7 @@ def unweighted_average_shortest_path_length(graph, parallel_threshold=300, disco
 
 
 @_rustworkx_dispatch
-def adjacency_matrix(graph, weight_fn=None, default_weight=1.0, null_value=0.0):
+def adjacency_matrix(graph, weight_fn=None, default_weight=1.0, null_value=0.0, node_list=None):
     """Return the adjacency matrix for a graph object
 
     In the case where there are multiple edges between nodes the value in the
@@ -257,6 +260,9 @@ def adjacency_matrix(graph, weight_fn=None, default_weight=1.0, null_value=0.0):
         value. This is the default value in the output matrix and it is used
         to indicate the absence of an edge between 2 nodes. By default this is
         ``0.0``.
+    :param list node_list: Optional list of node indices used to determine the
+        row and column order of the output matrix. If fewer than all graph nodes
+        are provided, only edges between listed nodes are included.
 
      :return: The adjacency matrix for the input dag as a numpy array
      :rtype: numpy.ndarray
@@ -313,7 +319,7 @@ def floyd_warshall(
         tells rustworkx/rust how to extract a numerical weight as a ``float``
         for edge object. Some simple examples are::
 
-            floyd_warshall(graph, weight_fn= lambda x: 1)
+            floyd_warshall(graph, weight_fn=lambda x: 1)
 
         to return a weight of 1 for all edges. Also::
 
@@ -499,7 +505,7 @@ def all_pairs_dijkstra_shortest_paths(graph, edge_cost_fn):
         of node indices making the path. For example::
 
             {
-                0: {1: [0, 1],  2: [0, 1, 2]},
+                0: {1: [0, 1], 2: [0, 1, 2]},
                 1: {2: [1, 2]},
                 2: {0: [2, 0]},
             }
@@ -679,8 +685,7 @@ def is_isomorphic(
 
             graph_a = rustworkx.PyGraph()
             graph_b = rustworkx.PyGraph()
-            rustworkx.is_isomorphic(graph_a, graph_b,
-                                lambda x, y: x == y)
+            rustworkx.is_isomorphic(graph_a, graph_b, lambda x, y: x == y)
 
     .. note::
 
@@ -727,8 +732,7 @@ def is_isomorphic_node_match(first, second, matcher, id_order=True):
 
         graph_a = rustworkx.PyDAG()
         graph_b = rustworkx.PyDAG()
-        rustworkx.is_isomorphic_node_match(graph_a, graph_b,
-                                        lambda x, y: x == y)
+        rustworkx.is_isomorphic_node_match(graph_a, graph_b, lambda x, y: x == y)
 
     .. note::
 
@@ -778,8 +782,7 @@ def is_subgraph_isomorphic(
 
             graph_a = rustworkx.PyGraph()
             graph_b = rustworkx.PyGraph()
-            rustworkx.is_subgraph_isomorphic(graph_a, graph_b,
-                                            lambda x, y: x == y)
+            rustworkx.is_subgraph_isomorphic(graph_a, graph_b, lambda x, y: x == y)
 
 
     :param first: The first graph to compare. Can either be a
@@ -995,6 +998,75 @@ def networkx_converter(graph, keep_attributes: bool = False):
             new_graph[node_index] = attributes
 
     return new_graph
+
+
+@_rustworkx_dispatch
+def kamada_kawai_layout(
+    graph,
+    pos=None,
+    fixed=None,
+    weight_fn=None,
+    default_weight=1.0,
+    epsilon=1e-4,
+    max_outer=500,
+    max_inner=10,
+    scale=1.0,
+    center=None,
+):
+    """
+    Position nodes using the Kamada-Kawai path-length cost-function.
+
+    The layout minimises the energy
+
+    .. math::
+
+       E = \\frac{1}{2} \\sum_{i<j} k_{ij} (|p_i - p_j| - l_{ij})^2
+
+    where :math:`d_{ij}` is the graph-theoretic shortest path between
+    nodes :math:`i` and :math:`j`, :math:`l_{ij} \\propto d_{ij}` is the
+    desired display distance, and :math:`k_{ij} = 1 / d_{ij}^2` is the
+    spring constant.  Minimisation follows the original
+    `Kamada and Kawai (1989) <https://doi.org/10.1016/0020-0190(89)90102-6>`__
+    scheme: at each outer step the node with the largest
+    partial-gradient norm is selected and updated by a 2D Newton step
+    against the local 2x2 Hessian.
+
+    Disconnected graphs are laid out by running Kamada-Kawai independently
+    on each connected component and packing the components in a row, so
+    components remain visibly separated rather than fighting for space
+    inside a single global energy minimisation.
+
+    :param graph: Graph to be used.  Can either be a
+        :class:`~rustworkx.PyGraph` or :class:`~rustworkx.PyDiGraph`.
+    :param dict pos:
+        Initial node positions as a dictionary with node ids as keys
+        and values as a coordinate list.  If ``None``, a per-component
+        circular layout is used as the starting point.  (``default=None``)
+    :param set fixed: Nodes to keep fixed at initial position.
+        Error raised if ``fixed`` is specified and ``pos`` is not.
+        (``default=None``)
+    :param weight_fn: An optional weight function for an edge.  It
+        will accept a single argument, the edge's weight object, and
+        return a float used as the edge weight in the all-pairs
+        shortest path computation.
+    :param float default_weight: Edge weight when ``weight_fn`` is not
+        provided.  (``default=1.0``)
+    :param float epsilon: Convergence threshold for the maximum
+        partial-gradient norm.  (``default=1e-4``)
+    :param int max_outer: Maximum number of outer iterations.
+        (``default=500``)
+    :param int max_inner: Maximum number of inner Newton steps per
+        outer iteration.  (``default=10``)
+    :param float scale: Scale factor for positions.  Not used unless
+        ``fixed`` is ``None``.  (``default=1.0``)
+    :param list center: Coordinate pair around which to center the
+        layout.  Not used unless ``fixed`` is ``None``.
+        (``default=None``)
+
+    :returns: A dictionary of positions keyed by node id.
+    :rtype: dict
+    """
+    raise TypeError(f"Invalid Input Type {type(graph)} for graph")
 
 
 @_rustworkx_dispatch
@@ -1274,6 +1346,101 @@ def degree_centrality(graph):
     :returns: a read-only dict-like object whose keys are edges and values are the
         degree centrality score for each node.
     :rtype: CentralityMapping
+    """
+    raise TypeError(f"Invalid Input Type {type(graph)} for graph")
+
+
+@_rustworkx_dispatch
+def group_degree_centrality(graph, group):
+    r"""Compute the group degree centrality of a set of nodes.
+
+    Group degree centrality measures the fraction of non-group nodes that are
+    connected to at least one member of the group. It is defined as:
+
+    .. math::
+
+        C_D(S) = \frac{|N(S) \setminus S|}{|V| - |S|}
+
+    where :math:`N(S)` is the union of neighborhoods of all nodes in :math:`S`.
+
+    Based on: Everett, M. G., & Borgatti, S. P. (1999).
+    The centrality of groups and classes.
+    Journal of Mathematical Sociology, 23(3), 181-201.
+
+    :param graph: The input graph. Can either be a
+        :class:`~rustworkx.PyGraph` or :class:`~rustworkx.PyDiGraph`.
+    :param list group: A list of node indices representing the group.
+
+    :returns: The group degree centrality as a float.
+    :rtype: float
+    """
+    raise TypeError(f"Invalid Input Type {type(graph)} for graph")
+
+
+@_rustworkx_dispatch
+def group_closeness_centrality(graph, group):
+    r"""Compute the group closeness centrality of a set of nodes.
+
+    Group closeness centrality measures how close a group of nodes is to all
+    non-group nodes. It is defined as:
+
+    .. math::
+
+        C_{close}(S) = \frac{|V \setminus S|}{\sum_{v \in V \setminus S} d(S, v)}
+
+    where :math:`d(S, v) = \min_{u \in S} d(u, v)` is the minimum distance
+    from any group member to node :math:`v`.
+
+    Based on: Everett, M. G., & Borgatti, S. P. (1999).
+    The centrality of groups and classes.
+    Journal of Mathematical Sociology, 23(3), 181-201.
+
+    :param graph: The input graph. Can either be a
+        :class:`~rustworkx.PyGraph` or :class:`~rustworkx.PyDiGraph`.
+    :param list group: A list of node indices representing the group.
+
+    :returns: The group closeness centrality as a float.
+    :rtype: float
+    """
+    raise TypeError(f"Invalid Input Type {type(graph)} for graph")
+
+
+@_rustworkx_dispatch
+def group_betweenness_centrality(graph, group, normalized=True, parallel_threshold=50):
+    r"""Compute the group betweenness centrality of a set of nodes.
+
+    Group betweenness centrality measures the fraction of shortest paths
+    between non-group node pairs that pass through at least one group member.
+    It is defined as:
+
+    .. math::
+
+        C_B(S) = \sum_{s,t \in V \setminus S} \frac{\sigma(s, t|S)}{\sigma(s, t)}
+
+    where :math:`\sigma(s,t)` is the number of shortest paths from :math:`s`
+    to :math:`t`, and :math:`\sigma(s,t|S)` is the number of those paths
+    passing through at least one node in :math:`S`.
+
+    Based on: Everett, M. G., & Borgatti, S. P. (1999).
+    The centrality of groups and classes.
+    Journal of Mathematical Sociology, 23(3), 181-201.
+
+    This function is multithreaded and will run in parallel if the number
+    of nodes in the graph is above the value of ``parallel_threshold`` (it
+    defaults to 50). If the function will be running in parallel the env var
+    ``RAYON_NUM_THREADS`` can be used to adjust how many threads will be used.
+
+    :param graph: The input graph. Can either be a
+        :class:`~rustworkx.PyGraph` or :class:`~rustworkx.PyDiGraph`.
+    :param list group: A list of node indices representing the group.
+    :param bool normalized: Whether to normalize the result. Defaults to True.
+    :param int parallel_threshold: The number of nodes to calculate the
+        the group betweenness centrality in parallel at if the number of nodes
+        in the graph is less than this value it will run in a single thread.
+        The default value is 50.
+
+    :returns: The group betweenness centrality as a float.
+    :rtype: float
     """
     raise TypeError(f"Invalid Input Type {type(graph)} for graph")
 
@@ -2028,7 +2195,7 @@ def all_pairs_bellman_ford_shortest_paths(graph, edge_cost_fn):
         of node indices making the path. For example::
 
             {
-                0: {1: [0, 1],  2: [0, 1, 2]},
+                0: {1: [0, 1], 2: [0, 1, 2]},
                 1: {2: [1, 2]},
                 2: {0: [2, 0]},
             }

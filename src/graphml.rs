@@ -16,7 +16,7 @@ use std::borrow::{Borrow, Cow};
 use std::convert::From;
 use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::iter::{FromIterator, Iterator};
 use std::num::{ParseFloatError, ParseIntError};
 use std::path::Path;
@@ -127,7 +127,7 @@ fn xml_attribute<'a>(element: &'a BytesStart<'a>, key: &[u8]) -> Result<String, 
         })
 }
 
-#[pyclass(eq, name = "GraphMLDomain")]
+#[pyclass(eq, name = "GraphMLDomain", from_py_object)]
 #[derive(Clone, Copy, PartialEq)]
 pub enum Domain {
     Node,
@@ -150,7 +150,7 @@ impl TryFrom<&[u8]> for Domain {
     }
 }
 
-#[pyclass(eq, name = "GraphMLType")]
+#[pyclass(eq, name = "GraphMLType", from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Type {
     Boolean,
@@ -250,8 +250,10 @@ impl Value {
     }
 }
 
-impl<'py> FromPyObject<'py> for Value {
-    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+impl<'py> FromPyObject<'_, 'py> for Value {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
         if let Ok(value) = ob.extract::<bool>() {
             return Ok(Value::Boolean(value));
         }
@@ -1157,11 +1159,13 @@ impl GraphML {
             let gzip_encoder = GzEncoder::new(buf_writer, Compression::default());
             let mut writer = Writer::new(gzip_encoder);
             self.write_graph_to_writer(&mut writer)?;
-            writer.into_inner().finish()?;
+            writer.into_inner().finish()?.flush()?;
         } else {
             let file = File::create(path)?;
-            let mut writer = Writer::new(file);
+            let buf_writer = BufWriter::new(file);
+            let mut writer = Writer::new(buf_writer);
             self.write_graph_to_writer(&mut writer)?;
+            writer.into_inner().flush()?;
         }
         Ok(())
     }
@@ -1263,7 +1267,7 @@ pub fn read_graphml<'py>(
 }
 
 /// Key definition: id, domain, name of the key, type, default value.
-#[pyclass(name = "GraphMLKey")]
+#[pyclass(name = "GraphMLKey", skip_from_py_object)]
 pub struct KeySpec {
     #[pyo3(get)]
     id: String,

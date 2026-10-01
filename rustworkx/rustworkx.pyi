@@ -189,6 +189,40 @@ def graph_degree_centrality(
     graph: PyGraph[_S, _T],
     /,
 ) -> CentralityMapping: ...
+def graph_group_degree_centrality(
+    graph: PyGraph[_S, _T],
+    group: list[int],
+    /,
+) -> float: ...
+def digraph_group_degree_centrality(
+    graph: PyDiGraph[_S, _T],
+    group: list[int],
+    /,
+) -> float: ...
+def graph_group_closeness_centrality(
+    graph: PyGraph[_S, _T],
+    group: list[int],
+    /,
+) -> float: ...
+def digraph_group_closeness_centrality(
+    graph: PyDiGraph[_S, _T],
+    group: list[int],
+    /,
+) -> float: ...
+def graph_group_betweenness_centrality(
+    graph: PyGraph[_S, _T],
+    group: list[int],
+    /,
+    normalized: bool = ...,
+    parallel_threshold: int = ...,
+) -> float: ...
+def digraph_group_betweenness_centrality(
+    graph: PyDiGraph[_S, _T],
+    group: list[int],
+    /,
+    normalized: bool = ...,
+    parallel_threshold: int = ...,
+) -> float: ...
 def digraph_katz_centrality(
     graph: PyDiGraph[_S, _T],
     /,
@@ -253,6 +287,7 @@ def digraph_adjacency_matrix(
     default_weight: float = ...,
     null_value: float = ...,
     parallel_edge: str = ...,
+    node_list: Sequence[int] | None = ...,
 ) -> npt.NDArray[np.float64]: ...
 def graph_adjacency_matrix(
     graph: PyGraph[_S, _T],
@@ -261,6 +296,7 @@ def graph_adjacency_matrix(
     default_weight: float = ...,
     null_value: float = ...,
     parallel_edge: str = ...,
+    node_list: Sequence[int] | None = ...,
 ) -> npt.NDArray[np.float64]: ...
 def cycle_basis(graph: PyGraph, /, root: int | None = ...) -> list[list[int]]: ...
 def articulation_points(graph: PyGraph, /) -> set[int]: ...
@@ -375,6 +411,7 @@ def layers(
     /,
     index_output: bool = ...,
 ) -> list[list[_S]] | list[list[int]]: ...
+
 @final
 class TopologicalSorter:
     def __init__(
@@ -562,6 +599,32 @@ def graph_spring_layout(
     seed: int | None = ...,
     /,
 ) -> Pos2DMapping: ...
+def digraph_kamada_kawai_layout(
+    graph: PyDiGraph[_S, _T],
+    pos: dict[int, tuple[float, float]] | None = ...,
+    fixed: set[int] | None = ...,
+    weight_fn: Callable[[_T], float] | None = ...,
+    default_weight: float = ...,
+    epsilon: float = ...,
+    max_outer: int = ...,
+    max_inner: int = ...,
+    scale: float = ...,
+    center: tuple[float, float] | None = ...,
+    /,
+) -> Pos2DMapping: ...
+def graph_kamada_kawai_layout(
+    graph: PyGraph[_S, _T],
+    pos: dict[int, tuple[float, float]] | None = ...,
+    fixed: set[int] | None = ...,
+    weight_fn: Callable[[_T], float] | None = ...,
+    default_weight: float = ...,
+    epsilon: float = ...,
+    max_outer: int = ...,
+    max_inner: int = ...,
+    scale: float = ...,
+    center: tuple[float, float] | None = ...,
+    /,
+) -> Pos2DMapping: ...
 
 # Line graph
 
@@ -621,6 +684,12 @@ def is_planar(graph: PyGraph, /) -> bool: ...
 
 # Random Graph
 
+def random_regular_graph(
+    num_nodes: int,
+    degree: int,
+    /,
+    seed: int | None = ...,
+) -> PyGraph: ...
 def directed_gnm_random_graph(
     num_nodes: int,
     num_edges: int,

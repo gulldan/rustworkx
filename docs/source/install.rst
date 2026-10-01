@@ -44,10 +44,10 @@ just as it would if there was a prebuilt binary available.
 
     To build from source you will need to ensure you have pip >=19.0.0
     installed, which supports PEP-517, or that you have manually installed
-    setuptools-rust prior to running pip install rustworkx. If you receive an
-    error about ``setuptools-rust`` not being found you should upgrade pip with
-    ``pip install -U pip`` or manually install ``setuptools-rust`` with:
-    ``pip install setuptools-rust`` and try again.
+    maturin prior to running pip install rustworkx. If you receive an
+    error about ``maturin`` not being found you should upgrade pip with
+    ``pip install -U pip`` or manually install ``maturin`` with:
+    ``pip install maturin`` and try again.
 
 .. _platform-support:
 
@@ -103,7 +103,7 @@ source.
      -
    * - macOS (11 or newer)
      - arm64
-     - :ref:`tier-1` [#f1]_
+     - :ref:`tier-1`
      -
    * - Windows 64bit
      - x86_64
@@ -120,11 +120,6 @@ source.
 
 
 .. _manylinux 2014: https://peps.python.org/pep-0599/>
-
-.. [#f1] Due to CI environment limitations tests for macOS arm64 are only run with
-   Python >= 3.10. The published binaries are still built and tested for all supported
-   Python versions, but the tests run on proposed changes are only run with Python >=3.10
-
 
 .. _tier-1:
 
@@ -176,7 +171,7 @@ Tier Experimental
 -----------------
 
 Tier Experimental platforms are not tested upstream as part of the development process.
-Pre-compiled binaries are built by the external community in separate repositories. Not all of rustworkx might compile for
+Pre-compiled binaries are built and published to PyPI as part of the release process. Not all of rustworkx might compile for
 platforms of this tier and features can be removed. Often, platforms in this tier use unstable features
 from the Rust compiler and might break at any time. Support for these platforms are best effort only.
 

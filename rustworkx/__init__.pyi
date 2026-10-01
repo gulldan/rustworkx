@@ -69,6 +69,14 @@ from .rustworkx import digraph_degree_centrality as digraph_degree_centrality
 from .rustworkx import graph_degree_centrality as graph_degree_centrality
 from .rustworkx import in_degree_centrality as in_degree_centrality
 from .rustworkx import out_degree_centrality as out_degree_centrality
+from .rustworkx import graph_group_degree_centrality as graph_group_degree_centrality
+from .rustworkx import digraph_group_degree_centrality as digraph_group_degree_centrality
+from .rustworkx import graph_group_closeness_centrality as graph_group_closeness_centrality
+from .rustworkx import digraph_group_closeness_centrality as digraph_group_closeness_centrality
+from .rustworkx import graph_group_betweenness_centrality as graph_group_betweenness_centrality
+from .rustworkx import (
+    digraph_group_betweenness_centrality as digraph_group_betweenness_centrality,
+)
 from .rustworkx import graph_greedy_color as graph_greedy_color
 from .rustworkx import graph_greedy_edge_color as graph_greedy_edge_color
 from .rustworkx import graph_is_bipartite as graph_is_bipartite
@@ -137,6 +145,8 @@ from .rustworkx import digraph_bipartite_layout as digraph_bipartite_layout
 from .rustworkx import graph_bipartite_layout as graph_bipartite_layout
 from .rustworkx import digraph_circular_layout as digraph_circular_layout
 from .rustworkx import graph_circular_layout as graph_circular_layout
+from .rustworkx import digraph_kamada_kawai_layout as digraph_kamada_kawai_layout
+from .rustworkx import graph_kamada_kawai_layout as graph_kamada_kawai_layout
 from .rustworkx import digraph_random_layout as digraph_random_layout
 from .rustworkx import graph_random_layout as graph_random_layout
 from .rustworkx import digraph_shell_layout as digraph_shell_layout
@@ -152,6 +162,7 @@ from .rustworkx import max_weight_matching as max_weight_matching
 from .rustworkx import is_matching as is_matching
 from .rustworkx import is_maximal_matching as is_maximal_matching
 from .rustworkx import is_planar as is_planar
+from .rustworkx import random_regular_graph as random_regular_graph
 from .rustworkx import directed_gnm_random_graph as directed_gnm_random_graph
 from .rustworkx import undirected_gnm_random_graph as undirected_gnm_random_graph
 from .rustworkx import directed_gnp_random_graph as directed_gnp_random_graph
@@ -334,6 +345,7 @@ def adjacency_matrix(
     weight_fn: Callable[[_T], float] | None = ...,
     default_weight: float = ...,
     null_value: float = ...,
+    node_list: Sequence[int] | None = ...,
 ) -> npt.NDArray[np.float64]: ...
 def all_simple_paths(
     graph: PyGraph | PyDiGraph,
@@ -497,6 +509,18 @@ def spring_layout(
     center: tuple[float, float] | None = ...,
     seed: int | None = ...,
 ) -> Pos2DMapping: ...
+def kamada_kawai_layout(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    pos: dict[int, tuple[float, float]] | None = ...,
+    fixed: set[int] | None = ...,
+    weight_fn: Callable[[_T], float] | None = ...,
+    default_weight: float = ...,
+    epsilon: float = ...,
+    max_outer: int = ...,
+    max_inner: int = ...,
+    scale: float = ...,
+    center: tuple[float, float] | None = ...,
+) -> Pos2DMapping: ...
 def networkx_converter(graph: Any, keep_attributes: bool = ...) -> PyGraph | PyDiGraph: ...
 def bipartite_layout(
     graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
@@ -549,6 +573,20 @@ def newman_weighted_closeness_centrality(
 def degree_centrality(
     graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
 ) -> CentralityMapping: ...
+def group_degree_centrality(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    group: list[int],
+) -> float: ...
+def group_closeness_centrality(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    group: list[int],
+) -> float: ...
+def group_betweenness_centrality(
+    graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
+    group: list[int],
+    normalized: bool = ...,
+    parallel_threshold: int = ...,
+) -> float: ...
 def edge_betweenness_centrality(
     graph: PyGraph[_S, _T] | PyDiGraph[_S, _T],
     normalized: bool = ...,

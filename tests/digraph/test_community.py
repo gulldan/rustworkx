@@ -347,7 +347,7 @@ class TestDiGraphCommunity(unittest.TestCase):
 
         # Run both algorithms with the same seed
         seed = 42
-        nx_communities = list(nx.community.asyn_lpa_communities(nx_g, seed=seed))
+        nx_communities = list(networkx.community.asyn_lpa_communities(nx_g, seed=seed))
         rx_communities = rustworkx.community.asyn_lpa_communities(g, seed=seed)
 
         # Both should complete successfully

@@ -271,14 +271,14 @@ pub fn asyn_lpa_communities(
 
         // Shuffle nodes in random order.
         if let Some(py_rng) = py_compat_rng.as_mut() {
-            for i in 0..n {
-                nodes[i] = i;
+            for (i, node) in nodes.iter_mut().enumerate() {
+                *node = i;
             }
             py_rng.shuffle(&mut nodes);
         } else {
             // Reset nodes to [0, 1, 2, ..., n-1] before shuffling
-            for i in 0..n {
-                nodes[i] = i;
+            for (i, node) in nodes.iter_mut().enumerate() {
+                *node = i;
             }
             shuffle_nodes(&mut rng, &mut nodes);
         }

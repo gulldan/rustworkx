@@ -1,12 +1,13 @@
 [project]
 name = "rustworkx"
-version = "0.17.1"
+version = "0.18.0"
 description = "A High-Performance Graph Library for Python"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.16.0,<3"
 ]
 readme = {file = "README.md", content-type = "text/markdown"}
+license = "Apache-2.0"
 license-files = ["LICENSE"]
 classifiers=[
     "Intended Audience :: Developers",
@@ -24,17 +25,11 @@ classifiers=[
 ]
 keywords = ["Networks", "Network", "Graph", "Graph Theory", "DAG"]
 
-[tool.setuptools]
-packages = ["rustworkx", "rustworkx.visualization"]
-include-package-data = true
+[tool.maturin]
+features = ["pyo3/extension-module"]
+locked = true
+bindings = "pyo3"
 
-[tool.distutils.bdist_wheel]
-py-limited-api = "cp310"
-
-[[tool.setuptools-rust.ext-modules]]
-target = "rustworkx.rustworkx"
-path = "Cargo.toml"
-binding = "PyO3"
 
 [project.optional-dependencies]
 mpl = ["matplotlib>=3.0"]
@@ -61,16 +56,16 @@ name = "Ivan Carvalho"
 email = "ivancarvalho@gatech.edu"
 
 [build-system]
-requires = ["setuptools>=77.0.0", "setuptools-rust>=1.9"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
 
 [dependency-groups]
 testinfra = [
     "nox==2025.10.16",
-    "uv==0.9.7",
+    "uv==0.11.15",
 ]
 test = [
-  "setuptools-rust",
+  "maturin>=1.9.0,<2.0",
   "testtools>=2.5.0",
   "networkx>=3.2",
   "stestr>=4.1",
@@ -80,9 +75,8 @@ test = [
   "pytest"
 ]
 lint = [
-    "black~=25.9",
-    "ruff==0.14.3",
-    "setuptools-rust",
+    "ruff==0.15.7",
+    "maturin>=1.9.0,<2.0",
     "typos~=1.39",
 ]
 stubs = [
@@ -107,12 +101,8 @@ releaseinfra = [
     "cibuildwheel==3.3.0; python_version >= '3.11'",
 ]
 
-[tool.black]
-line-length = 100
-target-version = ['py310', 'py311', 'py312', 'py313', 'py314']
-
 [tool.ruff]
-line-length = 105 # more lenient than black due to long function signatures
+line-length = 100
 src = ["rustworkx", "setup.py", "tests"]
 lint.select = [
     "E",   # pycodestyle
@@ -128,6 +118,14 @@ extend-exclude = ["doc"]
 "rustworkx/__init__.py" = ["F405", "F403"]
 "*.pyi" = ["F403", "F405", "PYI001", "PYI002"]
 
+[tool.ruff.lint.pycodestyle]
+max-line-length = 105 #  lint has a larger limit than the formatter because of long signatures
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
 [tool.typos.default]
 extend-ignore-words-re = [
   "[Ss]toer",
@@ -135,18 +133,21 @@ extend-ignore-words-re = [
 ]
 
 [tool.cibuildwheel]
-manylinux-x86_64-image = "manylinux2014"
-manylinux-i686-image = "manylinux2014"
-skip = "pp* cp314t* *win32 *musllinux*i686"
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-i686-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+manylinux-ppc64le-image = "manylinux_2_28"
+manylinux-s390x-image = "manylinux_2_28"
+skip = "pp* cp314t-win* c*t-*i686 cp314t-*s390x *win32 *musllinux*i686"
 test-requires = "networkx"
 test-command = "python -m unittest discover {project}/tests"
-before-build = "pip install -U setuptools-rust"
+before-build = 'pip install -U "maturin>=1.9.0,<2.0"'
 test-skip = "*linux_s390x *ppc64le *i686 *win32"
 
 [tool.cibuildwheel.linux]
 before-all = "yum install -y wget && {package}/tools/install_rust.sh"
 environment = 'PATH="$PATH:$HOME/.cargo/bin" CARGO_NET_GIT_FETCH_WITH_CLI="true"'
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} && pipx run abi3audit==0.0.9 --strict --report {wheel}"
+repair-wheel-command = 'auditwheel repair -w {dest_dir} {wheel} && if echo "{wheel}" | grep -vq cp314t; then pipx run abi3audit==0.0.9 --strict --report {wheel}; else echo "Skipping abi3audit for free-threaded wheel"; fi'
 
 [[tool.cibuildwheel.overrides]]
 select = "*-musllinux*"
@@ -154,7 +155,7 @@ before-all = "apk add --no-cache curl gcc && curl https://sh.rustup.rs -sSf | sh
 
 [tool.cibuildwheel.macos]
 environment = "MACOSX_DEPLOYMENT_TARGET=10.12"
-repair-wheel-command = "brew install pipx && pipx ensurepath && pipx run --spec delocate==0.11.0  delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} && pipx run abi3audit==0.0.9 --strict --report {wheel}"
+repair-wheel-command = 'brew install pipx && pipx ensurepath && pipx run --spec delocate==0.11.0  delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} && if echo "{wheel}" | grep -vq cp314t; then pipx run abi3audit==0.0.9 --strict --report {wheel}; else echo "Skipping abi3audit for free-threaded wheel"; fi'
 
 [tool.cibuildwheel.windows]
 repair-wheel-command = "cp {wheel} {dest_dir}/. && pipx run abi3audit==0.0.9 --strict --report {wheel}"

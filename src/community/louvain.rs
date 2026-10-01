@@ -17,6 +17,7 @@ use petgraph::visit::IntoEdgeReferences;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::prelude::*;
+use rand::rngs::SysRng;
 use rand_pcg::Pcg64;
 
 use crate::community::common::PythonCompatRng;
@@ -75,7 +76,7 @@ impl GraphState {
             let v = edge.target().index();
             let weight_obj = edge.weight();
 
-            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
+            let weight = weight_callable(py, weight_fn, weight_obj, 1.0)?;
 
             if weight <= 0.0 {
                 return Err(PyValueError::new_err(
@@ -154,8 +155,7 @@ impl GraphState {
         let mut new_node_metadata = vec![Vec::new(); num_communities];
 
         // Aggregate node metadata into community super-nodes.
-        for node in 0..self.num_nodes {
-            let comm = node_to_comm[node];
+        for (node, &comm) in node_to_comm[..self.num_nodes].iter().enumerate() {
             let new_node = comm_to_new_id[comm];
             new_node_metadata[new_node].extend(self.node_metadata[node].iter().copied());
         }
@@ -385,7 +385,7 @@ fn run_louvain(
     // Use pure Rust Pcg64 RNG (fast, deterministic, no Python dependency)
     let mut rng: LouvainRng = match seed {
         Some(s) => Pcg64::seed_from_u64(s),
-        None => Pcg64::from_os_rng(),
+        None => Pcg64::try_from_rng(&mut SysRng).unwrap(),
     };
 
     // Exact NetworkX compatibility mode:
@@ -632,6 +632,7 @@ fn merge_small_communities(
     text_signature = "(graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None)"
 )]
 #[pyo3(signature = (graph, /, weight_fn=None, resolution=1.0, threshold=0.0000001, seed=None, min_community_size=1, adjacency=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn louvain_communities(
     py: Python,
     graph: Py<PyAny>,
@@ -783,7 +784,7 @@ pub fn modularity(
             node_to_comm[idx] = cid;
         }
     }
-    if node_to_comm.iter().any(|&c| c == usize::MAX) {
+    if node_to_comm.contains(&usize::MAX) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "Partition is not a complete partition of the graph.",
         ));
@@ -811,8 +812,7 @@ fn modularity_core(gs: &GraphState, node_to_comm: &[usize], gamma: f64) -> f64 {
     let mut k_c = vec![0.0; max_comm + 1]; // sum of degrees of communities
 
     // First, calculate the sum of degrees for each community
-    for node in 0..gs.num_nodes {
-        let comm = node_to_comm[node];
+    for (node, &comm) in node_to_comm[..gs.num_nodes].iter().enumerate() {
         k_c[comm] += gs.node_degrees[node];
     }
 

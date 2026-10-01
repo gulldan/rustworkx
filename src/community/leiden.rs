@@ -17,7 +17,7 @@ use foldhash::{HashMap, HashMapExt};
 use petgraph::visit::{EdgeRef, IntoEdgeReferences};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use rand::RngCore;
+use rand::Rng;
 use std::collections::VecDeque;
 
 const UNASSIGNED: usize = usize::MAX;
@@ -220,7 +220,7 @@ impl GraphState {
             let (u, v) = if src <= dst { (src, dst) } else { (dst, src) };
             let weight_obj = edge.weight();
 
-            let weight = weight_callable(py, weight_fn, &weight_obj, 1.0)?;
+            let weight = weight_callable(py, weight_fn, weight_obj, 1.0)?;
 
             if let Some(min_w) = min_weight_filter {
                 if weight < min_w {
@@ -345,9 +345,9 @@ impl GraphState {
         let mut edge_weight_to_comm = vec![0.0; num_communities];
         let mut neighbor_comm_added = vec![false; num_communities];
 
-        for v_comm in 0..num_communities {
+        for (v_comm, members) in community_members.iter().enumerate() {
             let mut neighbor_communities: Vec<usize> = Vec::new();
-            for &v in &community_members[v_comm] {
+            for &v in members {
                 for &eid in &self.out_edge_ids[v] {
                     let Some(&(from, to, raw_weight)) = self.edges.get(eid) else {
                         continue;
@@ -627,8 +627,7 @@ fn move_nodes(
 
     let mut comm_sizes: Vec<usize> = vec![0; std::cmp::max(graph.num_nodes, max_comm + 1)];
     let mut comm_degrees: Vec<f64> = vec![0.0; std::cmp::max(graph.num_nodes, max_comm + 1)];
-    for node in 0..graph.num_nodes {
-        let comm = membership[node];
+    for (node, &comm) in membership[..graph.num_nodes].iter().enumerate() {
         if comm == UNASSIGNED {
             continue;
         }
@@ -837,8 +836,7 @@ fn merge_nodes_constrained(
     let mut sub_sizes: Vec<usize> = vec![0; std::cmp::max(graph.num_nodes, max_comm + 1)];
     let mut sub_degrees: Vec<f64> = vec![0.0; std::cmp::max(graph.num_nodes, max_comm + 1)];
 
-    for node in 0..graph.num_nodes {
-        let comm = sub_membership[node];
+    for (node, &comm) in sub_membership[..graph.num_nodes].iter().enumerate() {
         if comm == UNASSIGNED {
             continue;
         }
@@ -1025,6 +1023,7 @@ fn optimise_once(
     signature = (graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None),
     text_signature = "(graph, weight_fn=None, resolution=1.0, seed=None, min_weight=None, max_iterations=None, return_hierarchy=false, adjacency=None)"
 )]
+#[allow(clippy::too_many_arguments)]
 pub fn leiden_communities(
     py: Python,
     graph: Py<PyAny>,
